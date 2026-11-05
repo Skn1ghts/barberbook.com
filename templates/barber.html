@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BarberBook | My Schedule</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="navbar">
+        <a class="logo" href="/">
+            <img src="{{ url_for('static', filename='barberbook_logo.png') }}" alt="BarberBook Logo" class="logo-img">
+            BarberBook<span>.</span>
+        </a>
+        <div>
+            <span class="nav-link" style="margin-right: 20px; color: var(--muted);">{{ barber.full_name }}</span>
+            <a class="nav-link" href="{{ url_for('logout') }}">Log out</a>
+        </div>
+    </header>
+
+    <main class="appointments-section" style="max-width: 900px; margin-top: 40px;">
+        <div class="section-heading">
+            <p class="eyebrow">DATE: {{ today }} · WORKING HOURS: {{ barber.work_start }} - {{ barber.work_end }}</p>
+            <h2>My appointments: {{ appointments|length }}</h2>
+            <p>
+                {% if rating.rating_count %}
+                    My rating: <strong>★ {{ rating.avg_rating }}</strong> ({{ rating.rating_count }} rating{{ '' if rating.rating_count == 1 else 's' }})
+                {% else %}
+                    My rating: no ratings yet
+                {% endif %}
+            </p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="message {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <!-- Revenue Card -->
+        <div class="appointment-card" style="margin: 0 0 25px; border-left: 5px solid #7cae26; padding: 25px; flex-direction: column; align-items: flex-start;">
+            <div style="display: flex; justify-content: space-between; width: 100%; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+                <div>
+                    <p class="eyebrow" style="margin-top: 0;">REVENUE FROM COMPLETED SERVICES</p>
+                    <h2 style="margin: 5px 0 5px 0; font-size: 38px;">{{ "%.0f"|format(total_revenue) }} KZT</h2>
+                    <p style="margin: 0 0 10px;">{{ done_count }} completed service{{ '' if done_count == 1 else 's' }}</p>
+                </div>
+                <div style="display: flex; gap: 10px; background: var(--bg); padding: 5px; border-radius: 8px; border: 1px solid var(--line); height: fit-content;">
+                    <a href="?filter=today" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'today' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">Today</a>
+                    <a href="?filter=weekly" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'weekly' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">7 Days</a>
+                    <a href="?filter=monthly" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'monthly' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">30 Days</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="appointments-list">
+            {% for appt in appointments %}
+                <article class="appointment-card" style="border-left: 5px solid {% if appt.service_name == 'System Break' %}#d9534f{% elif appt.status == 'Booked' %}#c9f269{% else %}#e5e4dc{% endif %}; {% if appt.service_name == 'System Break' %}background: #fffafa;{% endif %}">
+                    <div style="display: flex; gap: 20px; align-items: center;">
+                        <div style="min-width: 90px; font-weight: 700; font-size: 13px;">
+                            {{ appt.appointment_date }}<br>
+                            {{ appt.appointment_time }}
+                        </div>
+                        <div>
+                            {% if appt.service_name == 'System Break' %}
+                                <strong style="font-size: 16px;">Break</strong>
+                                <p style="margin-top: 4px;">Blocked by the administrator</p>
+                            {% else %}
+                                <strong style="font-size: 16px;">{{ appt.customer_name }}</strong>
+                                <p style="margin-top: 4px;">
+                                    Phone: {{ appt.customer_phone or '—' }} · {{ appt.service_name }}
+                                </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        {% if appt.service_name == 'System Break' %}
+                            <span style="font-size: 12px; color: var(--muted); font-weight: 700;">[Break]</span>
+                        {% elif appt.status == 'Booked' %}
+                            <form action="{{ url_for('barber_update_status', appointment_id=appt.appointment_id) }}" method="POST">
+                                <input type="hidden" name="status" value="Completed">
+                                <button type="submit" style="background: none; border: none; color: #718a41; font-size: 12px; font-weight: 700; cursor: pointer;">[Complete]</button>
+                            </form>
+                            <form action="{{ url_for('barber_update_status', appointment_id=appt.appointment_id) }}" method="POST">
+                                <input type="hidden" name="status" value="Cancelled">
+                                <button type="submit" style="background: none; border: none; color: #d9534f; font-size: 12px; font-weight: 700; cursor: pointer;">[Cancel]</button>
+                            </form>
+                        {% else %}
+                            <span style="font-size: 12px; color: var(--muted); font-weight: 700;">[{{ appt.status }}]</span>
+                        {% endif %}
+                    </div>
+                </article>
+            {% else %}
+                <p>No upcoming appointments.</p>
+            {% endfor %}
+        </div>
+
+        {% if time_off %}
+            <div class="section-heading" style="margin-top: 40px;">
+                <p class="eyebrow">SET BY THE ADMINISTRATOR</p>
+                <h2 style="font-size: 22px;">My time off</h2>
+            </div>
+            <div class="appointments-list">
+                {% for t in time_off %}
+                    <article class="appointment-card" style="border-left: 5px solid #d9534f; background: #fffafa;">
+                        <div>
+                            <strong>{{ t.start }} → {{ t.end }}</strong>
+                            <p>{{ t.hours }} working hour(s) blocked</p>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </main>
+</body>
+</html>

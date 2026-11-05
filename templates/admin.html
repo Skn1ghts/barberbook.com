@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BarberBook | Schedule Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="navbar">
+        <a class="logo" href="/">
+            <img src="{{ url_for('static', filename='barberbook_logo.png') }}" alt="BarberBook Logo" class="logo-img">
+            BarberBook<span>.</span>
+        </a>
+        <a class="nav-link" href="{{ url_for('logout') }}">Log out</a>
+    </header>
+
+    <main class="appointments-section" style="max-width: 900px; margin-top: 40px;">
+        <div class="section-heading" style="display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
+                <p class="eyebrow">DATE: {{ today }}</p>
+                <h2>Today's Appointments: {{ appointments|length }}</h2>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="message {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <div class="appointments-list">
+            {% for appt in appointments %}
+                <article class="appointment-card" style="border-left: 5px solid {% if appt.service_name == 'System Break' %}#d9534f{% elif appt.status == 'Booked' %}#c9f269{% else %}#e5e4dc{% endif %}; {% if appt.service_name == 'System Break' %}background: #fffafa;{% endif %}">
+                    <div style="display: flex; gap: 20px; align-items: center;">
+                        <div style="min-width: 90px; font-weight: 700; font-size: 13px;">
+                            {{ appt.appointment_date }}<br>
+                            {{ appt.appointment_time }}
+                        </div>
+                        <div>
+                            <strong style="font-size: 16px;">{{ appt.customer_name }}</strong>
+                            <p style="margin-top: 4px;">
+                                Phone: {{ appt.customer_phone or '—' }} · Barber: {{ appt.barber_name }}
+                            </p>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                            {% if appt.service_name == 'System Break' %}
+                                <!-- Special button just for deleting breaks -->
+                                <form action="{{ url_for('delete_break', appointment_id=appt.appointment_id) }}" method="POST">
+                                    <button type="submit" style="background: none; border: none; color: #d9534f; font-size: 12px; font-weight: 700; cursor: pointer;">
+                                        [Remove Break]
+                                    </button>
+                                </form>
+                            {% elif appt.status == 'Booked' %}
+                                <!-- Standard buttons for real customers -->
+                                <form action="{{ url_for('update_status', appointment_id=appt.appointment_id) }}" method="POST">
+                                    <input type="hidden" name="status" value="Completed">
+                                    <button type="submit" style="background: none; border: none; color: #718a41; font-size: 12px; font-weight: 700; cursor: pointer;">
+                                        [Complete]
+                                    </button>
+                                </form>
+                                <form action="{{ url_for('update_status', appointment_id=appt.appointment_id) }}" method="POST">
+                                    <input type="hidden" name="status" value="Cancelled">
+                                    <button type="submit" style="background: none; border: none; color: #d9534f; font-size: 12px; font-weight: 700; cursor: pointer;">
+                                        [Cancel]
+                                    </button>
+                                </form>
+                            {% else %}
+                                <span style="font-size: 12px; color: var(--muted); font-weight: 700;">
+                                    [{{ appt.status }}]
+                                </span>
+                            {% endif %}
+                    </div>
+                </article>
+            {% else %}
+                <p>No upcoming appointments.</p>
+            {% endfor %}
+        </div>
+
+        <!-- Revenue Dashboard Card -->
+        <div style="margin: 25px 0; display: flex; gap: 20px;">
+            <div class="appointment-card" style="flex: 1; border-left: 5px solid #7cae26; padding: 25px; flex-direction: column; align-items: flex-start;">
+                <div style="display: flex; justify-content: space-between; width: 100%; align-items: flex-start;">
+                    <div>
+                        <p class="eyebrow" style="margin-top: 0;">REVENUE FROM COMPLETED SERVICES</p>
+                        <h2 style="margin: 5px 0 20px 0; font-size: 38px;">{{ "%.0f"|format(total_revenue) }} KZT</h2>
+                    </div>
+                    
+                    <!-- Filter Buttons -->
+                    <div style="display: flex; gap: 10px; background: var(--bg); padding: 5px; border-radius: 8px; border: 1px solid var(--line);">
+                        <a href="?filter=today" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'today' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">
+                            Today
+                        </a>
+                        <a href="?filter=weekly" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'weekly' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">
+                            7 Days
+                        </a>
+                        <a href="?filter=monthly" class="service-tag" style="text-decoration: none; font-weight: 600; color: inherit; {% if time_filter == 'monthly' %}background: var(--ink); color: white;{% else %}background: transparent;{% endif %}">
+                            30 Days
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Appointment (front desk) -->
+        <div class="section-heading" style="margin-top: 50px;">
+            <p class="eyebrow">FRONT DESK</p>
+            <h2>Add an appointment</h2>
+            <p>Book for a registered client, or for a walk-in client without an account (name only, phone is optional).</p>
+        </div>
+
+        <form action="{{ url_for('add_appointment') }}" method="POST" class="booking-form" id="admin-appt-form" style="grid-template-columns: 1fr 1fr; padding: 25px;">
+            <div class="field" style="grid-column: 1 / -1;">
+                <label>Client</label>
+                <div style="display: flex; gap: 25px; flex-wrap: wrap;">
+                    <label style="font-weight: 600; text-transform: none; letter-spacing: 0;"><input type="radio" name="client_mode" value="existing" checked> Existing client</label>
+                    <label style="font-weight: 600; text-transform: none; letter-spacing: 0;"><input type="radio" name="client_mode" value="walkin"> New walk-in (no account)</label>
+                </div>
+            </div>
+
+            <div class="field" id="existing-box" style="grid-column: 1 / -1;">
+                <label for="appt_customer">Choose client</label>
+                <select id="appt_customer" name="customer_id" required>
+                    <option value="">Select client</option>
+                    {% for c in customers %}
+                        <option value="{{ c.customer_id }}">{{ c.full_name }}{% if c.phone %} · {{ c.phone }}{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div id="walkin-box" style="grid-column: 1 / -1; display: none; gap: 15px;">
+                <div class="field" style="flex: 1;">
+                    <label for="appt_walkin_name">Client name</label>
+                    <input id="appt_walkin_name" type="text" name="walkin_name" maxlength="100" placeholder="e.g., Aidar">
+                </div>
+                <div class="field" style="flex: 1;">
+                    <label for="appt_walkin_phone">Phone (optional)</label>
+                    <input id="appt_walkin_phone" type="tel" name="walkin_phone" maxlength="15" inputmode="numeric" placeholder="digits only">
+                </div>
+            </div>
+
+            <div class="field">
+                <label for="appt_barber">Barber</label>
+                <select id="appt_barber" name="barber_id" required>
+                    <option value="">Select barber</option>
+                    {% for barber in barbers %}
+                        <option value="{{ barber.barber_id }}">{{ barber.full_name }} ({{ barber.work_start }}-{{ barber.work_end }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label for="appt_service">Service</label>
+                <select id="appt_service" name="service_id" required>
+                    <option value="">Select service</option>
+                    {% for service in services %}
+                        <option value="{{ service.service_id }}">{{ service.service_name }} — {{ "%.0f"|format(service.price) }} KZT ({{ service.duration_minutes }} min)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label for="appt_date">Date</label>
+                <input id="appt_date" type="date" name="appointment_date" min="{{ today }}" required>
+            </div>
+            <div class="field">
+                <label for="appt_time">Time</label>
+                <select id="appt_time" name="appointment_time" required>
+                    {% for hour in range(9, 20) %}
+                        <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="primary-button submit-button" style="grid-column: 1 / -1;">+ Add appointment</button>
+        </form>
+
+        <!-- Time off (breaks, days off) -->
+        <div class="section-heading" style="margin-top: 50px;">
+            <p class="eyebrow">TIME OFF</p>
+            <h2>Barber breaks &amp; days off</h2>
+            <p>Block a few hours, several days, or weeks. Clients cannot book blocked hours.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+            <form action="{{ url_for('add_break') }}" method="POST" class="booking-form" id="break-form" style="grid-template-columns: 1fr 1fr; padding: 25px;">
+                <div class="field" style="grid-column: 1 / -1;">
+                    <label for="break_barber">Barber</label>
+                    <select id="break_barber" name="barber_id" required>
+                        <option value="">Select barber</option>
+                        {% for barber in barbers %}
+                            <option value="{{ barber.barber_id }}">{{ barber.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="break_start_date">From date</label>
+                    <input id="break_start_date" type="date" name="start_date" min="{{ today }}" required>
+                </div>
+                <div class="field">
+                    <label for="break_start_time">From time</label>
+                    <select id="break_start_time" name="start_time">
+                        {% for hour in range(9, 20) %}
+                            <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="break_end_date">To date</label>
+                    <input id="break_end_date" type="date" name="end_date" min="{{ today }}" required>
+                </div>
+                <div class="field">
+                    <label for="break_end_time">To time</label>
+                    <select id="break_end_time" name="end_time">
+                        {% for hour in range(10, 21) %}
+                            <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <label style="grid-column: 1 / -1; font-weight: 600; font-size: 14px;">
+                    <input type="checkbox" name="full_days" id="break_full_days"> Full days (all working hours, from the first date to the last date)
+                </label>
+                <button type="submit" class="primary-button submit-button" style="grid-column: 1 / -1; background: #d9534f;">Block time</button>
+            </form>
+
+            <div class="appointments-list" style="max-height: 360px; overflow-y: auto;">
+                {% for t in time_off %}
+                    <article class="appointment-card" style="padding: 15px; border-left: 5px solid #d9534f; background: #fffafa;">
+                        <div>
+                            <strong style="font-size: 16px;">{{ t.barber_name }}</strong>
+                            <p style="margin-top: 4px;">{{ t.start }} → {{ t.end }}<br>{{ t.hours }} working hour(s) blocked</p>
+                        </div>
+                        <form action="{{ url_for('delete_time_off', group_key=t.gkey) }}" method="POST" onsubmit="return confirm('Remove this time off?');">
+                            <button type="submit" style="background: none; border: none; color: #d9534f; font-size: 12px; font-weight: 700; cursor: pointer;">[Remove]</button>
+                        </form>
+                    </article>
+                {% else %}
+                    <p>No upcoming time off.</p>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Barber Management Section -->
+        <div class="section-heading" style="margin-top: 50px;">
+            <p class="eyebrow">TEAM MANAGEMENT</p>
+            <h2>Manage Barbers</h2>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 50px;">
+            <!-- Add Barber Form -->
+            <form action="{{ url_for('add_barber') }}" method="POST" class="booking-form" style="grid-template-columns: 1fr; padding: 25px;">
+                <div style="display: flex; gap: 15px;">
+                    <div class="field" style="flex: 1;">
+                        <label>First name</label>
+                        <input type="text" name="first_name" required maxlength="50" placeholder="e.g., John">
+                    </div>
+                    <div class="field" style="flex: 1;">
+                        <label>Last name</label>
+                        <input type="text" name="last_name" required maxlength="50" placeholder="e.g., Doe">
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Barber password</label>
+                    <input type="text" name="password" required minlength="8" maxlength="128" autocomplete="off" placeholder="At least 8 characters">
+                </div>
+                <div style="display: flex; gap: 15px;">
+                    <div class="field" style="flex: 1;">
+                        <label>Start Time</label>
+                        <select name="work_start" required>
+                            {% for hour in range(9, 20) %}
+                                <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="field" style="flex: 1;">
+                        <label>End Time</label>
+                        <select name="work_end" required>
+                            {% for hour in range(10, 21) %}
+                                <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="primary-button submit-button" style="width: 100%; margin-top: 10px;">+ Add Barber</button>
+            </form>
+
+            <!-- Barbers List -->
+            <div class="appointments-list" style="max-height: 420px; overflow-y: auto;">
+                {% for barber in barbers %}
+                    <article class="appointment-card" style="padding: 15px; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong style="font-size: 16px;">{{ barber.full_name }}</strong>
+                            <p style="margin-top: 4px;">
+                                Hours: {{ barber.work_start }} - {{ barber.work_end }}<br>
+                                Rating: {% if barber.rating_count %}★ {{ barber.avg_rating }} ({{ barber.rating_count }}){% else %}no ratings yet{% endif %}<br>
+                                {% if barber.password_hash %}
+                                    Login password: set
+                                {% else %}
+                                    <span style="color: #d9534f; font-weight: 700;">No password - cannot log in</span>
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <form action="{{ url_for('set_barber_password', barber_id=barber.barber_id) }}" method="POST" style="display: flex; gap: 6px; align-items: center;">
+                                <input type="text" name="password" required minlength="8" maxlength="128" autocomplete="off" placeholder="New password" style="padding: 6px; border: 1px solid var(--line); border-radius: 4px; width: 130px;">
+                                <button type="submit" style="background: none; border: none; color: #718a41; font-size: 12px; font-weight: 700; cursor: pointer;">
+                                    [{% if barber.password_hash %}Change{% else %}Set{% endif %} password]
+                                </button>
+                            </form>
+                            <form action="{{ url_for('delete_barber', barber_id=barber.barber_id) }}" method="POST" onsubmit="return confirm('Are you sure you want to delete {{ barber.full_name }}?');">
+                                <button type="submit" style="background: none; border: none; color: #d9534f; font-size: 12px; font-weight: 700; cursor: pointer;">
+                                    [Delete]
+                                </button>
+                            </form>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        (function () {
+            // ---- Add appointment: existing client vs walk-in ----
+            var radios = document.querySelectorAll('input[name="client_mode"]');
+            var existingBox = document.getElementById('existing-box');
+            var walkinBox = document.getElementById('walkin-box');
+            var customerSelect = document.getElementById('appt_customer');
+            var walkinName = document.getElementById('appt_walkin_name');
+            var walkinPhone = document.getElementById('appt_walkin_phone');
+
+            function updateMode() {
+                var walkin = document.querySelector('input[name="client_mode"]:checked').value === 'walkin';
+                existingBox.style.display = walkin ? 'none' : '';
+                walkinBox.style.display = walkin ? 'flex' : 'none';
+                customerSelect.required = !walkin;
+                walkinName.required = walkin;
+            }
+            radios.forEach(function (r) { r.addEventListener('change', updateMode); });
+            updateMode();
+
+            // phone: digits only, name: letters (and space - ')
+            walkinPhone.addEventListener('input', function () {
+                walkinPhone.value = walkinPhone.value.replace(/[^0-9]/g, '');
+            });
+            walkinName.addEventListener('input', function () {
+                walkinName.value = walkinName.value.replace(/[^\p{L} '\-]/gu, '');
+            });
+
+            // ---- Time off ----
+            var startDate = document.getElementById('break_start_date');
+            var endDate = document.getElementById('break_end_date');
+            var fullDays = document.getElementById('break_full_days');
+            var startTime = document.getElementById('break_start_time');
+            var endTime = document.getElementById('break_end_time');
+
+            startDate.addEventListener('change', function () {
+                endDate.min = startDate.value;
+                if (!endDate.value || endDate.value < startDate.value) { endDate.value = startDate.value; }
+            });
+            fullDays.addEventListener('change', function () {
+                startTime.disabled = endTime.disabled = fullDays.checked;
+            });
+        })();
+    </script>
+</body>
+</html>
