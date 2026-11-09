@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from flask import (
     Flask, render_template, request,
-    redirect, url_for, flash, session
+    redirect, url_for, flash, session, jsonify
 )
 
 app = Flask(__name__)
@@ -651,6 +651,27 @@ def book():
             flash("Please select a time within the barber's working hours.", "error")
             return redirect(url_for("index"))
 
+        # Friendly messages: the barber is off (break) or the hour is taken.
+        # (The UNIQUE rule in the database still protects against races.)
+        busy = conn.execute("""
+            SELECT Services.service_name AS service_name
+            FROM Appointments
+            JOIN Services ON Appointments.service_id = Services.service_id
+            WHERE Appointments.barber_id = ?
+              AND Appointments.appointment_date = ?
+              AND Appointments.appointment_time = ?
+              AND Appointments.status != 'Cancelled'
+        """, (barber_id, appointment_date, appointment_time)).fetchone()
+
+        if busy is not None:
+            if busy["service_name"] == "System Break":
+                print("BOOKING REJECTED: barber is off")
+                flash("The barber is off at this time. Please choose another time.", "error")
+            else:
+                print("BOOKING REJECTED: slot already taken")
+                flash("This time is already booked by another client. Please choose another time.", "error")
+            return redirect(url_for("index"))
+
         # A cancelled appointment still occupies the slot (UNIQUE rule),
         # so remove it first. If the booking then fails, rollback restores it.
         conn.execute("""
@@ -1061,6 +1082,139 @@ def logout():
     session.clear()
     flash("You have been logged out.", "success")
     return redirect(url_for("index"))
+
+
+# ---------- Free / busy hours for the booking form ----------
+
+BOOKING_HOURS = range(9, 20)   # 09:00 ... 19:00, one slot per hour
+
+
+@app.route("/availability")
+@customer_required
+def availability():
+    """
+    JSON for the booking form: for one barber and one date, the state of
+    every hour: free, booked (another client), break (barber is off)
+    or outside (outside the barber's working hours).
+    """
+    barber_id = request.args.get("barber_id", type=int)
+    date = request.args.get("date", "")
+
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "bad date"}), 400
+    if barber_id is None:
+        return jsonify({"error": "bad barber"}), 400
+
+    conn = get_db()
+    try:
+        barber = conn.execute(
+            "SELECT work_start, work_end FROM Barbers WHERE barber_id = ?",
+            (barber_id,)
+        ).fetchone()
+        if barber is None:
+            return jsonify({"error": "no such barber"}), 404
+
+        taken = {
+            row["appointment_time"]: row["service_name"]
+            for row in conn.execute("""
+                SELECT Appointments.appointment_time, Services.service_name
+                FROM Appointments
+                JOIN Services ON Appointments.service_id = Services.service_id
+                WHERE Appointments.barber_id = ?
+                  AND Appointments.appointment_date = ?
+                  AND Appointments.status != 'Cancelled'
+            """, (barber_id, date))
+        }
+    finally:
+        conn.close()
+
+    slots = {}
+    for hour in BOOKING_HOURS:
+        t = f"{hour:02d}:00"
+        if not (barber["work_start"] <= t < barber["work_end"]):
+            slots[t] = "outside"
+        elif t in taken:
+            slots[t] = "break" if taken[t] == "System Break" else "booked"
+        else:
+            slots[t] = "free"
+    return jsonify({"slots": slots})
+
+
+# ---------- Change password (customer and barber) ----------
+
+def password_change_error(current_ok, current, new, confirm, validator):
+    """Returns an error text, or None when the change is allowed."""
+    if not current or not new or not confirm:
+        return "Please fill in all three password fields."
+    if not current_ok:
+        return "The current password is wrong."
+    if new != confirm:
+        return "The new password and its confirmation do not match."
+    if new == current:
+        return "The new password must be different from the current one."
+    return validator(new)
+
+
+@app.route("/account/password", methods=["POST"])
+@customer_required
+def change_password():
+    customer = current_customer()
+    current = request.form.get("current_password", "")
+    new = request.form.get("new_password", "")
+    confirm = request.form.get("confirm_password", "")
+
+    current_ok = bool(customer["password_hash"]) and check_password_hash(
+        customer["password_hash"], current
+    )
+    error = password_change_error(current_ok, current, new, confirm, validate_password)
+    if error:
+        flash(error, "error")
+        return redirect(url_for("index") + "#password")
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE Customers SET password_hash = ? WHERE customer_id = ?",
+            (generate_password_hash(new), customer["customer_id"])
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    flash("Password changed successfully.", "success")
+    return redirect(url_for("index") + "#password")
+
+
+@app.route("/barber/password", methods=["POST"])
+@barber_required
+def barber_change_password():
+    barber = current_barber()
+    current = request.form.get("current_password", "")
+    new = request.form.get("new_password", "")
+    confirm = request.form.get("confirm_password", "")
+
+    current_ok, _ = barber_password_ok(barber["password_hash"], current)
+    error = password_change_error(
+        current_ok, current, new, confirm, validate_barber_password
+    )
+    if error:
+        flash(error, "error")
+        return redirect(url_for("barber_dashboard") + "#password")
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE Barbers SET password_hash = ? WHERE barber_id = ?",
+            (generate_password_hash(new), barber["barber_id"])
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    flash("Password changed successfully.", "success")
+    return redirect(url_for("barber_dashboard") + "#password")
 
 
 # ---------- Barber dashboard ----------
