@@ -1,0 +1,378 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --bg: #f7f6f2;
+    --ink: #20221e;
+    --muted: #77786f;
+    --accent: #c9f269;
+    --line: #e5e4dc;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+}
+
+.navbar {
+    max-width: 1120px;
+    margin: auto;
+    padding: 26px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+}
+
+/* the links on the right wrap on narrow phones instead of overflowing */
+.navbar > div {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px 0;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Adds space between the image and the text */
+    color: var(--ink);
+    font-family: 'Manrope', sans-serif;
+    font-weight: 800;
+    font-size: 25px;
+    text-decoration: none;
+}
+
+.logo span {
+    color: #7cae26;
+}
+
+/* New class to restrict the logo image size */
+.logo-img {
+    height: 32px;
+    width: auto;
+}
+
+.nav-link {
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.hero {
+    max-width: 1120px;
+    margin: 35px auto 90px;
+    padding: 45px 24px;
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    align-items: center;
+    gap: 55px;
+}
+
+.eyebrow {
+    font-size: 11px;
+    letter-spacing: 2px;
+    font-weight: 700;
+    color: #718a41;
+}
+
+.hero h1,
+.section-heading h2 {
+    font-family: 'Manrope', sans-serif;
+    letter-spacing: -2px;
+}
+
+.hero h1 {
+    font-size: clamp(38px, 5vw, 65px);
+    line-height: 1.12;
+    margin: 20px 0;
+}
+
+.hero-text,
+.section-heading > p:last-child {
+    color: var(--muted);
+    line-height: 1.8;
+}
+
+.primary-button {
+    display: inline-block;
+    margin-top: 20px;
+    padding: 15px 23px;
+    background: var(--ink);
+    color: white;
+    border: 0;
+    border-radius: 7px;
+    text-decoration: none;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.primary-button:hover {
+    background: #42453c;
+}
+
+.hero-card {
+    min-height: 320px;
+    border-radius: 16px;
+    padding: 38px;
+    background: var(--accent);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.scissors {
+    font-size: 32px;
+}
+
+.hero-card > p {
+    margin-top: 28px;
+    font-size: 10px;
+    letter-spacing: 2px;
+}
+
+.hero-card h2 {
+    font-family: 'Manrope', sans-serif;
+    font-size: 32px;
+    line-height: 1.2;
+}
+
+.card-line {
+    width: 50px;
+    height: 3px;
+    background: var(--ink);
+    margin: 10px 0 20px;
+}
+
+.booking-section,
+.appointments-section {
+    max-width: 900px;
+    margin: 0 auto 90px;
+    padding: 0 24px;
+}
+
+.section-heading {
+    margin-bottom: 30px;
+}
+
+.section-heading h2 {
+    font-size: 34px;
+    margin: 10px 0;
+}
+
+.booking-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+    padding: 30px;
+    border: 1px solid var(--line);
+    background: white;
+    border-radius: 14px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.field label {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.field input,
+.field select {
+    width: 100%;
+    min-height: 47px;
+    padding: 12px;
+    border: 1px solid #deded6;
+    border-radius: 6px;
+    background: white;
+    color: var(--ink);
+    font: inherit;
+}
+
+.field input:focus,
+.field select:focus {
+    outline: 2px solid #b4d966;
+    border-color: #718a41;
+}
+
+.submit-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+}
+
+/* Consolidating the .message duplicates and adding the slide animation */
+@keyframes slideInDown {
+    from {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.message {
+    padding: 12px 16px;
+    margin: 15px 0;
+    border-radius: 8px;
+    font-weight: bold;
+    animation: slideInDown 0.4s ease-out forwards;
+}
+
+.message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.appointments-list {
+    display: grid;
+    gap: 12px;
+}
+
+.appointment-card {
+    padding: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    border: 1px solid var(--line);
+    background: white;
+    border-radius: 10px;
+}
+
+.appointment-card p {
+    margin-bottom: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.service-tag {
+    padding: 8px 12px;
+    border-radius: 20px;
+    background: #eef3e5;
+    font-size: 12px;
+}
+
+footer {
+    border-top: 1px solid var(--line);
+    padding: 30px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+footer p {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+@media (max-width: 700px) {
+    .hero {
+        grid-template-columns: 1fr;
+        gap: 30px;
+        margin-top: 10px;
+    }
+
+    .booking-form {
+        grid-template-columns: 1fr;
+        padding: 20px;
+    }
+
+    .hero h1 {
+        font-size: 42px;
+    }
+
+    .appointment-card {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    footer {
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+}
+
+/* --- Page Load Entry Animation --- */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Apply the animation to the left side of the hero section */
+.hero-content {
+    opacity: 0; /* Starts hidden */
+    animation: fadeInUp 0.8s ease-out forwards;
+}
+
+/* Apply the animation to the right side (image/video) with a slight delay for a staggered effect */
+.hero-image,
+.hero-card {
+    opacity: 0; /* Starts hidden */
+    animation: fadeInUp 0.8s ease-out 0.3s forwards; /* 0.3s delay */
+}
+
+/* --- Loading Screen --- */
+#loader-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    background-color: var(--bg);
+    z-index: 9999; /* Keeps it on top of everything else */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: opacity 0.6s ease, visibility 0.6s ease;
+}
+
+.spinner {
+    width: 45px;
+    height: 45px;
+    border: 5px solid var(--line);
+    border-top: 5px solid #7cae26;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* When the .loaded class is added to the body, fade this out */
+body.loaded #loader-wrapper {
+    opacity: 0;
+    visibility: hidden;
+}
