@@ -12,9 +12,17 @@ from functools import wraps
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
+from urllib.parse import urlsplit
+
 from flask import (
     Flask, render_template, request,
     redirect, url_for, flash, session, jsonify
+)
+from werkzeug.exceptions import HTTPException
+
+from translations import (
+    LANGUAGES, LANG_COOKIE, LANG_COOKIE_MAX_AGE,
+    get_lang, t, tn, money, minutes
 )
 
 app = Flask(__name__)
@@ -34,6 +42,46 @@ def check_templates():
 
 
 check_templates()
+
+
+# --------------------------------------------------
+# LANGUAGE (English / Russian / Kazakh), see translations.py
+# --------------------------------------------------
+
+# Every template (also macros imported from _booking.html) can use
+# _("text") / t("text", name=...), tn("{n} rating", count), money(4000), minutes(45).
+app.jinja_env.globals.update(_=t, t=t, tn=tn, money=money, minutes=minutes,
+                             LANGUAGES=LANGUAGES)
+
+
+@app.context_processor
+def inject_language():
+    """Current language code for <html lang> and the EN / RU / KZ switch."""
+    return {"lang": get_lang()}
+
+
+@app.route("/lang/<code>")
+def set_language(code):
+    """Remembers the chosen language (session + cookie for a year) and goes back."""
+    target = url_for("index")
+    referrer = request.referrer
+    if referrer:
+        parts = urlsplit(referrer)
+        if parts.scheme in ("http", "https") and parts.netloc == request.host:
+            # Pages shown after a POST (e.g. a failed login) cannot be opened
+            # with GET: go to the home page instead of a 405 error.
+            try:
+                app.url_map.bind(request.host).match(parts.path, method="GET")
+                target = parts.path + ("?" + parts.query if parts.query else "")
+            except HTTPException:
+                pass
+
+    response = redirect(target)
+    if code in LANGUAGES:
+        session["lang"] = code
+        response.set_cookie(LANG_COOKIE, code, max_age=LANG_COOKIE_MAX_AGE,
+                            samesite="Lax", httponly=True)
+    return response
 
 BASE_DIR = Path(__file__).resolve().parent
 # Both can be overridden with environment variables (useful for testing
@@ -152,44 +200,44 @@ BREAK_PHONE = "0000000000"
 def validate_name(value, label):
     """Letters only (any language). Returns an error text or None."""
     if not value:
-        return f"{label} is required."
+        return t("{label} is required.", label=label)
     if len(value) > 50:
-        return f"{label} is too long (maximum 50 letters)."
+        return t("{label} is too long (maximum 50 letters).", label=label)
     if not value.isalpha():
-        return f"{label}: only letters are allowed (no digits, spaces or symbols)."
+        return t("{label}: only letters are allowed (no digits, spaces or symbols).", label=label)
     return None
 
 
 def validate_phone(value):
     """Digits only, 10-15 of them. Returns an error text or None."""
     if not value:
-        return "Phone number is required."
+        return t("Phone number is required.")
     if not re.fullmatch(r"[0-9]+", value):
-        return "Phone number: only digits are allowed (no letters or symbols)."
+        return t("Phone number: only digits are allowed (no letters or symbols).")
     if not 10 <= len(value) <= 15:
-        return "Phone number must be between 10 and 15 digits long."
+        return t("Phone number must be between 10 and 15 digits long.")
     return None
 
 
 def validate_password(value):
     """At least 8 characters, with letters AND digits."""
     if len(value) < 8:
-        return "Password must be at least 8 characters long."
+        return t("Password must be at least 8 characters long.")
     if len(value) > 128:
-        return "Password is too long (maximum 128 characters)."
+        return t("Password is too long (maximum 128 characters).")
     if not any(c.isalpha() for c in value):
-        return "Password must contain at least one letter."
+        return t("Password must contain at least one letter.")
     if not any(c.isdigit() for c in value):
-        return "Password must contain at least one digit."
+        return t("Password must contain at least one digit.")
     return None
 
 
 def validate_barber_password(value):
     """Barber passwords are set by the admin: at least 8 characters."""
     if len(value) < 8:
-        return "Password must be at least 8 characters long."
+        return t("Password must be at least 8 characters long.")
     if len(value) > 128:
-        return "Password is too long (maximum 128 characters)."
+        return t("Password is too long (maximum 128 characters).")
     return None
 
 
@@ -258,7 +306,7 @@ def customer_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if current_customer() is None:
-            flash("Please log in or register to continue.", "error")
+            flash(t("Please log in or register to continue."), "error")
             return redirect(url_for("welcome"))
         return f(*args, **kwargs)
     return decorated_function
@@ -487,36 +535,42 @@ def fits(start, total, barber, busy, date=None, now=None):
         now = now or datetime.now()
         today = now.strftime("%Y-%m-%d")
         if date < today or (date == today and start <= now.hour * 60 + now.minute):
-            return False, "past", "This time has already passed. Please choose a later time."
+            return False, "past", t("This time has already passed. Please choose a later time.")
 
     if not (work_start <= start < work_end):
-        return False, "outside", (
-            f"The barber works {barber['work_start']} - {barber['work_end']}. "
-            "Please choose a time in that range."
+        return False, "outside", t(
+            "The barber works {start}–{end}. Please choose a time in that range.",
+            start=barber["work_start"], end=barber["work_end"]
         )
 
     for b_start, b_end, kind in busy:
         if b_start <= start < b_end:
             if kind == "break":
-                return False, "break", "The barber is off at this time. Please choose another time."
-            return False, "booked", (
+                return False, "break", t("The barber is off at this time. Please choose another time.")
+            return False, "booked", t(
                 "This time is already booked by another client. Please choose another time."
             )
 
     if end > work_end:
-        return False, "too_long", (
-            f"Not enough time: the selected services take {total} min "
-            f"({fmt_hm(start)}–{fmt_hm(end)}), but the barber's shift ends at "
-            f"{barber['work_end']}. Choose an earlier time or fewer services."
+        return False, "too_long", t(
+            "Not enough time: the selected services take {total} min ({start}–{end}), "
+            "but the barber's shift ends at {work_end}. "
+            "Choose an earlier time or fewer services.",
+            total=total, start=fmt_hm(start), end=fmt_hm(end), work_end=barber["work_end"]
         )
 
     for b_start, b_end, kind in busy:
         if start < b_start < end:
-            what = "the barber's time off" if kind == "break" else "the next booking"
-            return False, "overlap", (
-                f"Not enough time: the selected services take {total} min "
-                f"({fmt_hm(start)}–{fmt_hm(end)}) and would overlap {what} "
-                f"at {fmt_hm(b_start)}. Choose another time or fewer services."
+            if kind == "break":
+                text = ("Not enough time: the selected services take {total} min "
+                        "({start}–{end}) and would overlap the barber's time off "
+                        "at {at}. Choose another time or fewer services.")
+            else:
+                text = ("Not enough time: the selected services take {total} min "
+                        "({start}–{end}) and would overlap the next booking "
+                        "at {at}. Choose another time or fewer services.")
+            return False, "overlap", t(
+                text, total=total, start=fmt_hm(start), end=fmt_hm(end), at=fmt_hm(b_start)
             )
 
     return True, "free", ""
@@ -537,14 +591,14 @@ def selected_services(conn, form):
         try:
             service_id = int(value)
         except (TypeError, ValueError):
-            return None, "Please choose valid services."
+            return None, t("Please choose valid services.")
         if service_id not in ids:
             ids.append(service_id)
 
     if not ids:
-        return None, "Please choose at least one service."
+        return None, t("Please choose at least one service.")
     if len(ids) > MAX_SERVICES_PER_BOOKING:
-        return None, f"Please choose at most {MAX_SERVICES_PER_BOOKING} services in one booking."
+        return None, t("Please choose at most {max} services in one booking.", max=MAX_SERVICES_PER_BOOKING)
 
     marks = ",".join("?" * len(ids))
     rows = conn.execute(
@@ -553,7 +607,7 @@ def selected_services(conn, form):
     ).fetchall()
     by_id = {row["service_id"]: row for row in rows}
     if len(by_id) != len(ids):
-        return None, "One of the selected services does not exist."
+        return None, t("One of the selected services does not exist.")
     return [by_id[i] for i in ids], None
 
 
@@ -635,7 +689,7 @@ def with_services(conn, rows):
 
         total_minutes = row["appt_minutes"] or sum(s["duration_minutes"] for s in services)
         item["services"] = services
-        item["service_names"] = " + ".join(s["service_name"] for s in services)
+        item["service_names"] = " + ".join(t(s["service_name"]) for s in services)
         item["total_minutes"] = total_minutes
         item["total_price"] = sum(s["price"] for s in services)
         item["end_time"] = fmt_hm(to_minutes(row["appointment_time"]) + total_minutes)
@@ -848,11 +902,11 @@ def book():
 
     if not request.form.getlist("service_ids") and not request.form.get("service_id"):
         print("BOOKING REJECTED: no services")
-        return back("Please choose at least one service.")
+        return back(t("Please choose at least one service."))
 
     if not barber_id or not appointment_date or not appointment_time:
         print("BOOKING REJECTED: missing fields")
-        return back("Please fill in all fields.")
+        return back(t("Please fill in all fields."))
 
     try:
         barber_id = int(barber_id)
@@ -860,11 +914,11 @@ def book():
         datetime.strptime(appointment_time, "%H:%M")
     except ValueError as error:
         print("BOOKING REJECTED: invalid input:", error)
-        return back("Please enter a valid date, time, barber and service.")
+        return back(t("Please enter a valid date, time, barber and service."))
 
     if appointment_time not in BOOKING_TIMES:
         print("BOOKING REJECTED: not on the 30-minute grid:", appointment_time)
-        return back("Please choose a start time from the list (every 30 minutes).")
+        return back(t("Please choose a start time from the list (every 30 minutes)."))
 
     conn = None
 
@@ -879,7 +933,7 @@ def book():
 
         if barber is None:
             print("BOOKING REJECTED: barber not found:", barber_id)
-            return back("The selected barber does not exist.")
+            return back(t("The selected barber does not exist."))
 
         services, error = selected_services(conn, request.form)
         if error:
@@ -914,9 +968,12 @@ def book():
         print("Appointments count:", count)
 
         end_time = fmt_hm(to_minutes(appointment_time) + total)
-        names = " + ".join(s["service_name"] for s in services)
-        done = (f"Appointment booked successfully! {appointment_date}, "
-                f"{appointment_time}–{end_time}: {names} ({total} min).")
+        names = " + ".join(t(s["service_name"]) for s in services)
+        done = t(
+            "Appointment booked successfully! {date}, {start}–{end}: {services} ({minutes} min).",
+            date=appointment_date, start=appointment_time, end=end_time,
+            services=names, minutes=total
+        )
 
         # A backup failure must not undo a saved booking.
         backup_path = create_backup()
@@ -924,7 +981,7 @@ def book():
         if backup_path:
             flash(done, "success")
         else:
-            flash(done + " The backup could not be created.", "success")
+            flash(done + " " + t("The backup could not be created."), "success")
 
     except sqlite3.IntegrityError as error:
         if conn is not None:
@@ -932,8 +989,8 @@ def book():
 
         print("BOOKING DATABASE CONSTRAINT ERROR:", error)
         flash(
-            "This time may already be booked, "
-            "or the submitted data violates a database rule.", "error"
+            t("This time may already be booked, "
+              "or the submitted data violates a database rule."), "error"
         )
 
     except (sqlite3.Error, OSError) as error:
@@ -941,7 +998,7 @@ def book():
             conn.rollback()
 
         print("BOOKING DATABASE ERROR:", repr(error))
-        flash("A database error occurred. Check the VS Code terminal.", "error")
+        flash(t("A database error occurred. Check the VS Code terminal."), "error")
 
     finally:
         if conn is not None:
@@ -967,7 +1024,7 @@ def rate_barber(barber_id):
     except ValueError:
         rating = 0
     if not 1 <= rating <= 5:
-        return back("Please choose from 1 to 5 stars.")
+        return back(t("Please choose from 1 to 5 stars."))
 
     conn = get_db()
     try:
@@ -976,7 +1033,7 @@ def rate_barber(barber_id):
             (barber_id,)
         ).fetchone()
         if barber is None:
-            return back("This barber does not exist.")
+            return back(t("This barber does not exist."))
 
         if REQUIRE_COMPLETED_VISIT:
             visited = conn.execute("""
@@ -984,7 +1041,7 @@ def rate_barber(barber_id):
                 WHERE customer_id = ? AND barber_id = ? AND status = 'Completed'
             """, (customer_id, barber_id)).fetchone()[0]
             if not visited:
-                return back("You can rate a barber after a completed visit.")
+                return back(t("You can rate a barber after a completed visit."))
 
         # One rating per client per barber; rating again replaces the old one
         conn.execute("""
@@ -997,11 +1054,12 @@ def rate_barber(barber_id):
               datetime.now().strftime("%Y-%m-%d %H:%M")))
         conn.commit()
         create_backup()
-        flash(f"Thank you! You rated {barber['full_name']}: {rating}/5.", "success")
+        flash(t("Thank you! You rated {name}: {rating}/5.",
+                name=barber["full_name"], rating=rating), "success")
     except sqlite3.Error as error:
         conn.rollback()
         print("RATE ERROR:", error)
-        flash("Database error occurred. Please try again.", "error")
+        flash(t("Database error occurred. Please try again."), "error")
     finally:
         conn.close()
 
@@ -1033,13 +1091,13 @@ def cancel_appointment(appointment_id):
 
         if cursor.rowcount:
             create_backup()
-            flash("Your appointment has been cancelled.", "success")
+            flash(t("Your appointment has been cancelled."), "success")
         else:
-            flash("This appointment cannot be cancelled.", "error")
+            flash(t("This appointment cannot be cancelled."), "error")
     except sqlite3.Error as error:
         conn.rollback()
         print("CANCEL ERROR:", error)
-        flash("Database error occurred. Please try again.", "error")
+        flash(t("Database error occurred. Please try again."), "error")
     finally:
         conn.close()
 
@@ -1055,7 +1113,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
-            flash("Please log in to access the dashboard.", "error")
+            flash(t("Please log in to access the dashboard."), "error")
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
@@ -1066,7 +1124,7 @@ def barber_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if current_barber() is None:
-            flash("Please log in as a barber to access this page.", "error")
+            flash(t("Please log in as a barber to access this page."), "error")
             return redirect(url_for("welcome", tab="barber"))
         return f(*args, **kwargs)
     return decorated_function
@@ -1094,8 +1152,8 @@ def register():
 
     errors = {}
     for key, error in (
-        ("first_name", validate_name(first_name, "First name")),
-        ("last_name", validate_name(last_name, "Last name")),
+        ("first_name", validate_name(first_name, t("First name"))),
+        ("last_name", validate_name(last_name, t("Last name"))),
         ("phone", validate_phone(phone)),
         ("password", validate_password(password)),
     ):
@@ -1103,7 +1161,7 @@ def register():
             errors[key] = error
 
     if not errors and phone == BREAK_PHONE:
-        errors["phone"] = "This phone number cannot be used."
+        errors["phone"] = t("This phone number cannot be used.")
 
     if errors:
         return render_auth("register", form, errors, 400)
@@ -1122,8 +1180,7 @@ def register():
 
         if existing is not None and existing["password_hash"]:
             flash(
-                "An account with this phone number already exists. "
-                "Please log in.", "error"
+                t("An account with this phone number already exists. Please log in."), "error"
             )
             return render_auth("register", form, {}, 409)
 
@@ -1151,15 +1208,14 @@ def register():
     except sqlite3.IntegrityError:
         conn.rollback()
         flash(
-            "An account with this phone number already exists. "
-            "Please log in.", "error"
+            t("An account with this phone number already exists. Please log in."), "error"
         )
         return render_auth("register", form, {}, 409)
 
     except sqlite3.Error as error:
         conn.rollback()
         print("REGISTER ERROR:", error)
-        flash("Database error occurred. Please try again.", "error")
+        flash(t("Database error occurred. Please try again."), "error")
         return render_auth("register", form, {}, 500)
 
     finally:
@@ -1169,7 +1225,7 @@ def register():
 
     session.clear()
     session["customer_id"] = customer_id
-    flash(f"Account created. Welcome, {first_name}!", "success")
+    flash(t("Account created. Welcome, {name}!", name=first_name), "success")
     return redirect(url_for("index"))
 
 
@@ -1182,7 +1238,7 @@ def customer_login():
     form = {"phone": phone}
 
     if not phone or not password:
-        flash("Please enter your phone number and password.", "error")
+        flash(t("Please enter your phone number and password."), "error")
         return render_auth("login", form, {}, 400)
 
     phone_error = validate_phone(phone)
@@ -1203,7 +1259,7 @@ def customer_login():
         or not customer["password_hash"]
         or not check_password_hash(customer["password_hash"], password)
     ):
-        flash("Invalid phone number or password.", "error")
+        flash(t("Invalid phone number or password."), "error")
         return render_auth("login", form, {}, 401)
 
     session.clear()
@@ -1221,7 +1277,7 @@ def barber_login():
     form = {"first_name": first_name, "last_name": last_name}
 
     if not first_name or not last_name or not password:
-        flash("Please enter your first name, last name and password.", "error")
+        flash(t("Please enter your first name, last name and password."), "error")
         return render_auth("barber", form, {}, 400)
 
     conn = get_db()
@@ -1246,8 +1302,8 @@ def barber_login():
 
     if barber is None:
         flash(
-            "Invalid name or password. Barber passwords are assigned "
-            "by the administrator.", "error"
+            t("Invalid name or password. Barber passwords are assigned by the administrator."),
+            "error"
         )
         return render_auth("barber", form, {}, 401)
 
@@ -1277,17 +1333,17 @@ def login():
         if request.form.get("username") == "admin" and request.form.get("password") == "admin123":
             session.clear()
             session['logged_in'] = True
-            flash("Welcome to the Admin Dashboard.", "success")
+            flash(t("Welcome to the Admin Dashboard."), "success")
             return redirect(url_for("admin"))
         else:
-            flash("Invalid credentials. Please try again.", "error")
+            flash(t("Invalid credentials. Please try again."), "error")
     return render_template("login.html")
 
 
 @app.route("/logout")
 def logout():
     session.clear()
-    flash("You have been logged out.", "success")
+    flash(t("You have been logged out."), "success")
     return redirect(url_for("index"))
 
 
@@ -1341,12 +1397,12 @@ def availability():
     now = datetime.now()
     slots = {}
     free_shortest = 0
-    for t in BOOKING_TIMES:
-        _, state, _ = fits(to_minutes(t), duration, barber, busy, date=date, now=now)
-        slots[t] = state
+    for hhmm in BOOKING_TIMES:
+        _, state, _ = fits(to_minutes(hhmm), duration, barber, busy, date=date, now=now)
+        slots[hhmm] = state
         # Would at least the shortest service fit here? (lets the form say
         # "your combination is too long" instead of "the day is full")
-        if fits(to_minutes(t), shortest, barber, busy, date=date, now=now)[0]:
+        if fits(to_minutes(hhmm), shortest, barber, busy, date=date, now=now)[0]:
             free_shortest += 1
 
     return jsonify({
@@ -1364,13 +1420,13 @@ def availability():
 def password_change_error(current_ok, current, new, confirm, validator):
     """Returns an error text, or None when the change is allowed."""
     if not current or not new or not confirm:
-        return "Please fill in all three password fields."
+        return t("Please fill in all three password fields.")
     if not current_ok:
-        return "The current password is wrong."
+        return t("The current password is wrong.")
     if new != confirm:
-        return "The new password and its confirmation do not match."
+        return t("The new password and its confirmation do not match.")
     if new == current:
-        return "The new password must be different from the current one."
+        return t("The new password must be different from the current one.")
     return validator(new)
 
 
@@ -1400,7 +1456,7 @@ def change_password():
     finally:
         conn.close()
 
-    flash("Password changed successfully.", "success")
+    flash(t("Password changed successfully."), "success")
     return redirect(url_for("index") + "#password")
 
 
@@ -1430,7 +1486,7 @@ def barber_change_password():
     finally:
         conn.close()
 
-    flash("Password changed successfully.", "success")
+    flash(t("Password changed successfully."), "success")
     return redirect(url_for("barber_dashboard") + "#password")
 
 
@@ -1511,7 +1567,7 @@ def barber_update_status(appointment_id):
     new_status = request.form.get("status")
 
     if new_status not in ("Completed", "Cancelled"):
-        flash("Invalid status update.", "error")
+        flash(t("Invalid status update."), "error")
         return redirect(url_for("barber_dashboard"))
 
     barber_id = session["barber_id"]
@@ -1533,12 +1589,13 @@ def barber_update_status(appointment_id):
 
         if cursor.rowcount:
             create_backup()
-            flash(f"Appointment #{appointment_id} marked as {new_status}.", "success")
+            flash(t("Appointment #{id} marked as {status}.",
+                  id=appointment_id, status=t(new_status)), "success")
         else:
-            flash("Appointment not found.", "error")
+            flash(t("Appointment not found."), "error")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while updating status.", "error")
+        flash(t("Database error occurred while updating status."), "error")
         print("BARBER UPDATE ERROR:", error)
     finally:
         conn.close()
@@ -1647,19 +1704,19 @@ def add_appointment():
 
     has_services = request.form.getlist("service_ids") or request.form.get("service_id")
     if not all([barber_id, has_services, appointment_date, appointment_time]):
-        return back("Please choose a barber, at least one service, a date and a time.")
+        return back(t("Please choose a barber, at least one service, a date and a time."))
 
     try:
         barber_id = int(barber_id)
         date_obj = datetime.strptime(appointment_date, "%Y-%m-%d").date()
         datetime.strptime(appointment_time, "%H:%M")
     except ValueError:
-        return back("Please enter a valid date and time.")
+        return back(t("Please enter a valid date and time."))
 
     if date_obj < datetime.now().date():
-        return back("You cannot add an appointment for a day that has passed.")
+        return back(t("You cannot add an appointment for a day that has passed."))
     if appointment_time not in BOOKING_TIMES:
-        return back("Please choose a start time from the list (every 30 minutes).")
+        return back(t("Please choose a start time from the list (every 30 minutes)."))
 
     # ---- Check the client fields before touching the database ----
     walkin_name = ""
@@ -1671,20 +1728,20 @@ def add_appointment():
         walkin_phone = request.form.get("walkin_phone", "").strip()
 
         if not walkin_name:
-            return back("Please enter the client's name.")
+            return back(t("Please enter the client's name."))
         if len(walkin_name) > 100 or not WALKIN_NAME_RE.match(walkin_name):
-            return back("Client name: only letters are allowed (no digits or symbols).")
+            return back(t("Client name: only letters are allowed (no digits or symbols)."))
         if walkin_phone:
             phone_error = validate_phone(walkin_phone)
             if phone_error:
                 return back(phone_error)
             if walkin_phone == BREAK_PHONE:
-                return back("This phone number cannot be used.")
+                return back(t("This phone number cannot be used."))
     else:
         try:
             customer_id = int(request.form.get("customer_id", ""))
         except ValueError:
-            return back("Please choose a client from the list.")
+            return back(t("Please choose a client from the list."))
 
     conn = get_db()
     try:
@@ -1693,7 +1750,7 @@ def add_appointment():
             "FROM Barbers WHERE barber_id = ?", (barber_id,)
         ).fetchone()
         if barber is None:
-            return back("The selected barber does not exist.")
+            return back(t("The selected barber does not exist."))
 
         services, error = selected_services(conn, request.form)
         if error:
@@ -1740,7 +1797,7 @@ def add_appointment():
                 (customer_id, BREAK_PHONE)
             ).fetchone()
             if customer is None:
-                return back("The selected client does not exist.")
+                return back(t("The selected client does not exist."))
             client_label = customer["full_name"]
 
         insert_booking(conn, customer_id, barber_id,
@@ -1748,20 +1805,21 @@ def add_appointment():
         conn.commit()
         create_backup()
         end_time = fmt_hm(to_minutes(appointment_time) + total)
-        names = " + ".join(s["service_name"] for s in services)
-        flash(
-            f"Appointment added for {client_label}: {appointment_date}, "
-            f"{appointment_time}–{end_time} with {barber['full_name']} "
-            f"({names}, {total} min).", "success"
-        )
+        names = " + ".join(t(s["service_name"]) for s in services)
+        flash(t(
+            "Appointment added for {client}: {date}, {start}–{end} with {barber} "
+            "({services}, {minutes} min).",
+            client=client_label, date=appointment_date, start=appointment_time,
+            end=end_time, barber=barber["full_name"], services=names, minutes=total
+        ), "success")
 
     except sqlite3.IntegrityError:
         conn.rollback()
-        flash("That time is already taken for this barber (booking or break).", "error")
+        flash(t("That time is already taken for this barber (booking or break)."), "error")
     except sqlite3.Error as error:
         conn.rollback()
         print("ADMIN ADD APPOINTMENT ERROR:", error)
-        flash("Database error occurred while adding the appointment.", "error")
+        flash(t("Database error occurred while adding the appointment."), "error")
     finally:
         conn.close()
 
@@ -1787,9 +1845,9 @@ def add_break():
         return redirect(url_for("admin"))
 
     if not barber_id or not start_date or not end_date:
-        return back("Please choose a barber and the start and end dates.")
+        return back(t("Please choose a barber and the start and end dates."))
     if not full_days and (not start_time or not end_time):
-        return back("Please choose the start and end time, or tick 'Full days'.")
+        return back(t("Please choose the start and end time, or tick 'Full days'."))
 
     try:
         barber_id = int(barber_id)
@@ -1805,14 +1863,14 @@ def add_break():
             end_dt = datetime.combine(
                 end_d, datetime.strptime(end_time, "%H:%M").time())
     except ValueError:
-        return back("Please enter valid dates and times.")
+        return back(t("Please enter valid dates and times."))
 
     if start_d < datetime.now().date():
-        return back("Time off cannot start on a day that has already passed.")
+        return back(t("Time off cannot start on a day that has already passed."))
     if end_dt <= start_dt:
-        return back("The end of the time off must be after its start.")
+        return back(t("The end of the time off must be after its start."))
     if (end_dt - start_dt) > timedelta(days=366):
-        return back("Time off can be at most one year long.")
+        return back(t("Time off can be at most one year long."))
 
     conn = get_db()
     try:
@@ -1821,7 +1879,7 @@ def add_break():
             "FROM Barbers WHERE barber_id = ?", (barber_id,)
         ).fetchone()
         if barber is None:
-            return back("The selected barber does not exist.")
+            return back(t("The selected barber does not exist."))
 
         first_hour = int(barber["work_start"][:2])
         last_hour = int(barber["work_end"][:2])  # exclusive
@@ -1837,11 +1895,10 @@ def add_break():
             day += timedelta(days=1)
 
         if not slots:
-            return back(
-                f"No working hours of {barber['full_name']} "
-                f"({barber['work_start']} - {barber['work_end']}) "
-                "fall inside this period."
-            )
+            return back(t(
+                "No working hours of {name} ({start}–{end}) fall inside this period.",
+                name=barber["full_name"], start=barber["work_start"], end=barber["work_end"]
+            ))
 
         break_customer_id, break_service_id = get_break_ids(conn)
         group = uuid.uuid4().hex
@@ -1854,23 +1911,23 @@ def add_break():
 
         for slot in slots:
             d = slot.strftime("%Y-%m-%d")
-            t = slot.strftime("%H:%M")
+            hhmm = slot.strftime("%H:%M")
 
             if d not in bookings_by_day:
                 bookings_by_day[d] = [
                     (b_start, b_end) for b_start, b_end, kind
                     in busy_intervals(conn, barber_id, d) if kind == "booked"
                 ]
-            start = to_minutes(t)
+            start = to_minutes(hhmm)
             if any(b_start < start + BREAK_MINUTES and start < b_end
                    for b_start, b_end in bookings_by_day[d]):
-                skipped.append(f"{d} {t}")
+                skipped.append(f"{d} {hhmm}")
                 continue
 
             existing = conn.execute("""
                 SELECT appointment_id, status FROM Appointments
                 WHERE barber_id = ? AND appointment_date = ? AND appointment_time = ?
-            """, (barber_id, d, t)).fetchone()
+            """, (barber_id, d, hhmm)).fetchone()
 
             if existing is not None:
                 if existing["status"] == "Cancelled":
@@ -1879,7 +1936,7 @@ def add_break():
                     conn.execute("DELETE FROM Appointments WHERE appointment_id = ?",
                                  (existing["appointment_id"],))
                 else:
-                    skipped.append(f"{d} {t}")
+                    skipped.append(f"{d} {hhmm}")
                     continue
 
             conn.execute("""
@@ -1887,7 +1944,7 @@ def add_break():
                     (customer_id, barber_id, service_id, appointment_date,
                      appointment_time, status, break_group)
                 VALUES (?, ?, ?, ?, ?, 'Booked', ?)
-            """, (break_customer_id, barber_id, break_service_id, d, t, group))
+            """, (break_customer_id, barber_id, break_service_id, d, hhmm, group))
             blocked += 1
 
         conn.commit()
@@ -1895,21 +1952,23 @@ def add_break():
         if blocked:
             create_backup()
 
-        period = (f"{start_dt:%Y-%m-%d %H:%M} to {end_dt:%Y-%m-%d %H:%M}"
-                  if not full_days else f"{start_d} to {end_d} (full days)")
-        message = (f"Time off added for {barber['full_name']}: "
-                   f"{blocked} hour(s) blocked, {period}.")
+        if full_days:
+            period = t("{start} to {end} (full days)", start=start_d, end=end_d)
+        else:
+            period = t("{start} to {end}",
+                       start=f"{start_dt:%Y-%m-%d %H:%M}", end=f"{end_dt:%Y-%m-%d %H:%M}")
+        message = t("Time off added for {name}: {blocked}, {period}.",
+                    name=barber["full_name"],
+                    blocked=tn("{n} working hour blocked", blocked), period=period)
         if skipped:
             shown = ", ".join(skipped[:5]) + (" ..." if len(skipped) > 5 else "")
-            message += (f" {len(skipped)} hour(s) were NOT blocked because they "
-                        f"already have bookings ({shown}). Cancel those "
-                        "bookings first, then add the time off again.")
+            message += " " + tn("{n} hour was NOT blocked", len(skipped), list=shown)
         flash(message, "success" if blocked else "error")
 
     except sqlite3.Error as error:
         conn.rollback()
         print("BREAK ERROR:", error)
-        flash("Database error occurred while adding time off.", "error")
+        flash(t("Database error occurred while adding time off."), "error")
     finally:
         conn.close()
 
@@ -1930,11 +1989,11 @@ def delete_time_off(group_key):
                          (group_key,))
         conn.commit()
         create_backup()
-        flash("Time off removed. The hours are open for booking again.", "success")
+        flash(t("Time off removed. The hours are open for booking again."), "success")
     except sqlite3.Error as error:
         conn.rollback()
         print("DELETE TIME OFF ERROR:", error)
-        flash("Database error occurred while removing time off.", "error")
+        flash(t("Database error occurred while removing time off."), "error")
     finally:
         conn.close()
 
@@ -1951,12 +2010,12 @@ def add_barber():
     work_end = request.form.get("work_end")
 
     if not all([work_start, work_end]):
-        flash("All fields are required to add a barber.", "error")
+        flash(t("All fields are required to add a barber."), "error")
         return redirect(url_for("admin"))
 
     for error in (
-        validate_name(first_name, "Barber first name"),
-        validate_name(last_name, "Barber last name"),
+        validate_name(first_name, t("Barber first name")),
+        validate_name(last_name, t("Barber last name")),
         validate_barber_password(password),
     ):
         if error:
@@ -1964,7 +2023,7 @@ def add_barber():
             return redirect(url_for("admin"))
 
     if work_start >= work_end:
-        flash("Work end time must be after start time.", "error")
+        flash(t("Work end time must be after start time."), "error")
         return redirect(url_for("admin"))
 
     first_name = first_name.capitalize()
@@ -1981,7 +2040,7 @@ def add_barber():
                 normalize_name(b["first_name"]) == normalize_name(first_name)
                 and normalize_name(b["last_name"]) == normalize_name(last_name)
             ):
-                flash("A barber with this name already exists.", "error")
+                flash(t("A barber with this name already exists."), "error")
                 return redirect(url_for("admin"))
 
         conn.execute("""
@@ -1993,10 +2052,10 @@ def add_barber():
               generate_password_hash(password), work_start, work_end))
         conn.commit()
         create_backup()
-        flash(f"Barber {full_name} added successfully!", "success")
+        flash(t("Barber {name} added successfully!", name=full_name), "success")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while adding barber.", "error")
+        flash(t("Database error occurred while adding barber."), "error")
         print("ADD BARBER ERROR:", error)
     finally:
         conn.close()
@@ -2023,12 +2082,12 @@ def set_barber_password(barber_id):
         conn.commit()
         if cursor.rowcount:
             create_backup()
-            flash("Barber password saved.", "success")
+            flash(t("Barber password saved."), "success")
         else:
-            flash("Barber not found.", "error")
+            flash(t("Barber not found."), "error")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while saving the password.", "error")
+        flash(t("Database error occurred while saving the password."), "error")
         print("SET BARBER PASSWORD ERROR:", error)
     finally:
         conn.close()
@@ -2044,10 +2103,10 @@ def delete_break(appointment_id):
         conn.execute("DELETE FROM Appointments WHERE appointment_id = ?", (appointment_id,))
         conn.commit()
         create_backup()
-        flash("Break removed successfully! The time slot is now open for customers.", "success")
+        flash(t("Break removed successfully! The time slot is now open for customers."), "success")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while removing break.", "error")
+        flash(t("Database error occurred while removing break."), "error")
         print("DELETE BREAK ERROR:", error)
     finally:
         conn.close()
@@ -2066,15 +2125,15 @@ def delete_barber(barber_id):
         ).fetchone()[0]
         
         if appt_count > 0:
-            flash("Cannot delete this barber because they have booked appointments in the system.", "error")
+            flash(t("Cannot delete this barber because they have booked appointments in the system."), "error")
         else:
             conn.execute("DELETE FROM Barbers WHERE barber_id = ?", (barber_id,))
             conn.commit()
             create_backup()
-            flash("Barber removed successfully.", "success")
+            flash(t("Barber removed successfully."), "success")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while deleting barber.", "error")
+        flash(t("Database error occurred while deleting barber."), "error")
         print("DELETE BARBER ERROR:", error)
     finally:
         conn.close()
@@ -2088,7 +2147,7 @@ def update_status(appointment_id):
     new_status = request.form.get("status")
     
     if new_status not in ['Booked', 'Completed', 'Cancelled']:
-        flash("Invalid status update.", "error")
+        flash(t("Invalid status update."), "error")
         return redirect(url_for("admin"))
 
     conn = get_db()
@@ -2114,7 +2173,8 @@ def update_status(appointment_id):
                                    exclude_id=appointment_id)
                 )
                 if not ok:
-                    flash(f"Appointment #{appointment_id} cannot be restored. {message}", "error")
+                    flash(t("Appointment #{id} cannot be restored. {reason}",
+                            id=appointment_id, reason=message), "error")
                     return redirect(url_for("admin"))
 
         conn.execute("""
@@ -2127,10 +2187,11 @@ def update_status(appointment_id):
         # Create a backup after a successful modification
         create_backup()
         
-        flash(f"Appointment #{appointment_id} marked as {new_status}.", "success")
+        flash(t("Appointment #{id} marked as {status}.",
+                  id=appointment_id, status=t(new_status)), "success")
     except sqlite3.Error as error:
         conn.rollback()
-        flash("Database error occurred while updating status.", "error")
+        flash(t("Database error occurred while updating status."), "error")
         print("UPDATE ERROR:", error)
     finally:
         conn.close()

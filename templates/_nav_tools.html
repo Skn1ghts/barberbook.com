@@ -1,0 +1,13 @@
+{#
+    Header tools: the EN / RU / KZ language switch. static/ui.js finds this
+    .nav-tools container and appends the light/dark theme toggle to it.
+    Usage (inside <header class="navbar">):  {% include "_nav_tools.html" %}
+#}
+<div class="nav-tools">
+    <nav class="lang-switch" aria-label="{{ _('Language') }}">
+        {%- for code, (label, name) in LANGUAGES.items() %}
+        <a href="{{ url_for('set_language', code=code) }}" lang="{{ code }}" hreflang="{{ code }}" title="{{ name }}"
+           {%- if code == lang %} class="active" aria-current="true"{% endif %}>{{ label }}</a>
+        {%- endfor %}
+    </nav>
+</div>

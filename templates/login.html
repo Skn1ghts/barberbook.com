@@ -1,22 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}" data-label-dark="{{ _('Switch to dark theme') }}" data-label-light="{{ _('Switch to light theme') }}">
 <head>
     <meta charset="UTF-8">
-    <title>BarberBook | Admin Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BarberBook | {{ _('Admin Login') }}</title>
+    <script>try{var t=localStorage.getItem('bb-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;}catch(e){}</script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <header class="navbar">
         <a class="logo" href="/">
-            <img src="{{ url_for('static', filename='barberbook_logo.svg') }}" alt="BarberBook Logo" class="logo-img" width="48" height="32">
+            <img src="{{ url_for('static', filename='barberbook_logo.svg') }}" alt="{{ _('BarberBook logo') }}" class="logo-img" width="48" height="32">
             BarberBook<span>.</span>
         </a>
+        {% include "_nav_tools.html" %}
     </header>
 
     <main class="booking-section" style="margin-top: 50px; max-width: 500px;">
         <div class="section-heading">
-            <p class="eyebrow">RESTRICTED ACCESS</p>
-            <h2>Admin Login</h2>
+            <p class="eyebrow">{{ _('Restricted access') }}</p>
+            <h2>{{ _('Admin Login') }}</h2>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -27,15 +30,17 @@
 
         <form action="{{ url_for('login') }}" method="POST" class="booking-form" style="grid-template-columns: 1fr;">
             <div class="field">
-                <label for="username">Username</label>
+                <label for="username">{{ _('Username') }}</label>
                 <input id="username" name="username" type="text" required>
             </div>
             <div class="field">
-                <label for="password">Password</label>
+                <label for="password">{{ _('Password') }}</label>
                 <input id="password" name="password" type="password" required>
             </div>
-            <button class="primary-button" type="submit" style="width: 100%;">Log In</button>
+            <button class="primary-button" type="submit" style="width: 100%;">{{ _('Log in') }}</button>
         </form>
     </main>
+
+    <script src="{{ url_for('static', filename='ui.js') }}" defer></script>
 </body>
 </html>

@@ -48,7 +48,7 @@ site, and add a barber with a password in the admin panel (Manage Barbers).
 
 ## What each role can do
 
-- **Customer:** register and log in, see services and barbers, pick a free time (past hours are blocked), book, see and cancel own appointments, rate a barber after a completed visit.
+- **Customer:** register and log in, see services and barbers, choose one or several services at once (the total duration must fit the barber's shift and free time; start times every 30 minutes), pick a free time (past hours are blocked), book, see and cancel own appointments, rate a barber after a completed visit.
 - **Barber:** see own schedule, mark appointments Completed or Cancelled.
 - **Administrator:** add appointments for registered or walk-in clients, add or remove barbers and set their passwords, block time off, change appointment status, see revenue (today / 7 days / 30 days).
 
@@ -61,6 +61,11 @@ templates/                index (customer), auth, login, barber, admin
 static/                   style.css, logo (svg), video (webm), photo, audio
 backups/                  automatic database copies (created at run time)
 ```
+
+## Interface
+
+- Languages: English, Russian, Kazakh (switch EN / RU / KZ in the header; texts live in `translations.py`).
+- Light and dark theme (toggle in the header, remembered in the browser).
 
 ## Known limitations
 

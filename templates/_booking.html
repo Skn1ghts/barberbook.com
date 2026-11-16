@@ -9,8 +9,8 @@
         </form>
         {{ booking.script() }}
 
-    All texts the script shows are data-* attributes below, so they can be
-    translated in this template without touching JavaScript.
+    All texts the script shows are data-* attributes below, translated with
+    _() (see translations.py), so JavaScript needs no translations of its own.
     Placeholders in {curly} braces are filled in by the script.
 #}
 
@@ -18,28 +18,28 @@
 data-booking-form
 data-availability-url="{{ url_for('availability') }}"
 data-min-duration="{{ min_duration }}"
-data-msg-total="Total: {minutes} min · {price} KZT"
-data-msg-total-empty="No services selected yet."
-data-msg-visit="Your visit: {start}–{end}"
-data-msg-no-service="Please choose at least one service."
-data-msg-pick="Choose a barber and a date to see free times."
-data-msg-loading="Checking free times..."
-data-msg-load-error="Could not load free times. The server will still check your choice."
-data-msg-free="{count} start time(s) available for {minutes} min. Unavailable times are greyed out."
-data-msg-none-fit="These services together take {minutes} min — no time left with this barber on this date; remove a service or pick another day."
-data-msg-none="No free time with this barber on this date. Try another date or barber."
-data-msg-time-dropped="{time} does not fit the chosen services any more. Please pick another time."
-data-reason-booked="booked"
-data-reason-break="barber is off"
-data-reason-outside="not working"
-data-reason-past="past"
-data-reason-too_long="not enough time (shift ends {work_end})"
-data-reason-overlap="not enough time (overlaps the next booking)"
+data-msg-total="{{ _('Total: {minutes} min · {price} KZT') }}"
+data-msg-total-empty="{{ _('No services selected yet.') }}"
+data-msg-visit="{{ _('Your visit: {start}–{end}') }}"
+data-msg-no-service="{{ _('Please choose at least one service.') }}"
+data-msg-pick="{{ _('Choose a barber and a date to see free times.') }}"
+data-msg-loading="{{ _('Checking free times...') }}"
+data-msg-load-error="{{ _('Could not load free times. The server will still check your choice.') }}"
+data-msg-free="{{ _('Available start times: {count} (for {minutes} min). Unavailable times are greyed out.') }}"
+data-msg-none-fit="{{ _('These services together take {minutes} min — no time left with this barber on this date; remove a service or pick another day.') }}"
+data-msg-none="{{ _('No free time with this barber on this date. Try another date or barber.') }}"
+data-msg-time-dropped="{{ _('{time} does not fit the chosen services any more. Please pick another time.') }}"
+data-reason-booked="{{ _('booked') }}"
+data-reason-break="{{ _('barber is off') }}"
+data-reason-outside="{{ _('not working') }}"
+data-reason-past="{{ _('past') }}"
+data-reason-too_long="{{ _('not enough time (shift ends {work_end})') }}"
+data-reason-overlap="{{ _('not enough time (overlaps the next booking)') }}"
 {%- endmacro %}
 
-{% macro service_picker(services, prefix, legend="Choose services") -%}
+{% macro service_picker(services, prefix, legend=None) -%}
 <fieldset class="service-picker">
-    <legend>{{ legend }}</legend>
+    <legend>{{ legend or _('Choose services') }}</legend>
     <div class="service-list">
         {% for service in services %}
             <label class="service-option" for="{{ prefix }}_{{ service.service_id }}">
@@ -50,17 +50,17 @@ data-reason-overlap="not enough time (overlaps the next booking)"
                        data-role="service"
                        data-duration="{{ service.duration_minutes }}"
                        data-price="{{ '%.0f'|format(service.price) }}">
-                <span class="service-option-name">{{ service.service_name }}</span>
-                <span class="service-option-meta">{{ "%.0f"|format(service.price) }} KZT · {{ service.duration_minutes }} min</span>
+                <span class="service-option-name">{{ _(service.service_name) }}</span>
+                <span class="service-option-meta">{{ money(service.price) }} · {{ minutes(service.duration_minutes) }}</span>
             </label>
         {% endfor %}
     </div>
-    <p class="booking-summary" data-role="summary" aria-live="polite">No services selected yet.</p>
+    <p class="booking-summary" data-role="summary" aria-live="polite">{{ _('No services selected yet.') }}</p>
 </fieldset>
 {%- endmacro %}
 
-{% macro time_options(times, placeholder="Select time") -%}
-<option value="">{{ placeholder }}</option>
+{% macro time_options(times, placeholder=None) -%}
+<option value="">{{ placeholder or _('Select time') }}</option>
 {% for t in times %}
     <option value="{{ t }}" data-label="{{ t }}">{{ t }}</option>
 {% endfor %}

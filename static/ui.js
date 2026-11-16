@@ -42,7 +42,10 @@
         var dark = getTheme() === 'dark';
         // Show the icon of the theme you will switch TO.
         toggleButton.innerHTML = dark ? SUN : MOON;
-        var label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+        // Translated labels come from <html data-label-light / data-label-dark>.
+        var label = dark
+            ? (root.dataset.labelLight || 'Switch to light theme')
+            : (root.dataset.labelDark || 'Switch to dark theme');
         toggleButton.setAttribute('aria-label', label);
         toggleButton.title = label;
         toggleButton.setAttribute('aria-pressed', dark ? 'true' : 'false');

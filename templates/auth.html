@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}" data-label-dark="{{ _('Switch to dark theme') }}" data-label-light="{{ _('Switch to light theme') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BarberBook | Log in or register</title>
+    <title>BarberBook | {{ _('Log in or register') }}</title>
+    <script>try{var t=localStorage.getItem('bb-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;}catch(e){}</script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
         .auth-tabs { display: flex; gap: 8px; margin-bottom: 20px; background: var(--bg); padding: 5px; border-radius: 10px; border: 1px solid var(--line); }
@@ -37,17 +38,18 @@
 
     <header class="navbar">
         <a class="logo" href="/">
-            <img src="{{ url_for('static', filename='barberbook_logo.svg') }}" alt="BarberBook Logo" class="logo-img" width="48" height="32">
+            <img src="{{ url_for('static', filename='barberbook_logo.svg') }}" alt="{{ _('BarberBook logo') }}" class="logo-img" width="48" height="32">
             BarberBook<span>.</span>
         </a>
-        <a class="nav-link" href="{{ url_for('login') }}" style="color: var(--muted);">Admin Login</a>
+        <a class="nav-link" href="{{ url_for('login') }}" style="color: var(--muted);">{{ _('Admin Login') }}</a>
+        {% include "_nav_tools.html" %}
     </header>
 
     <main class="booking-section" style="margin-top: 50px; max-width: 500px;">
         <div class="section-heading">
-            <p class="eyebrow">WELCOME</p>
-            <h2>Log in or register</h2>
-            <p>To book an appointment you need an account.</p>
+            <p class="eyebrow">{{ _('Welcome') }}</p>
+            <h2>{{ _('Log in or register') }}</h2>
+            <p>{{ _('To book an appointment you need an account.') }}</p>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -57,47 +59,47 @@
         {% endwith %}
 
         <div class="auth-tabs">
-            <button type="button" class="auth-tab {% if tab == 'login' %}active{% endif %}" data-tab="login">Log in</button>
-            <button type="button" class="auth-tab {% if tab == 'register' %}active{% endif %}" data-tab="register">Register</button>
-            <button type="button" class="auth-tab {% if tab == 'barber' %}active{% endif %}" data-tab="barber">Barber</button>
+            <button type="button" class="auth-tab {% if tab == 'login' %}active{% endif %}" data-tab="login">{{ _('Log in') }}</button>
+            <button type="button" class="auth-tab {% if tab == 'register' %}active{% endif %}" data-tab="register">{{ _('Register') }}</button>
+            <button type="button" class="auth-tab {% if tab == 'barber' %}active{% endif %}" data-tab="barber">{{ _('Barber') }}</button>
         </div>
 
         <!-- LOG IN -->
         <form id="panel-login" class="booking-form auth-panel" style="grid-template-columns: 1fr;"
               action="{{ url_for('customer_login') }}" method="POST" {% if tab != 'login' %}hidden{% endif %}>
-            {{ field('login_phone', 'phone', 'Phone number', 'tel', lf.phone, le.phone, 'digits',
+            {{ field('login_phone', 'phone', _('Phone number'), 'tel', lf.phone, le.phone, 'digits',
                      'inputmode="numeric" maxlength="15" autocomplete="tel"') }}
-            {{ field('login_password', 'password', 'Password', 'password', '', '', '',
+            {{ field('login_password', 'password', _('Password'), 'password', '', '', '',
                      'autocomplete="current-password"') }}
-            <button class="primary-button" type="submit" style="width: 100%;">Log in</button>
+            <button class="primary-button" type="submit" style="width: 100%;">{{ _('Log in') }}</button>
         </form>
 
         <!-- REGISTER -->
         <form id="panel-register" class="booking-form auth-panel" style="grid-template-columns: 1fr;"
               action="{{ url_for('register') }}" method="POST" {% if tab != 'register' %}hidden{% endif %}>
-            {{ field('reg_first_name', 'first_name', 'First name', 'text', rf.first_name, re_.first_name, 'letters',
+            {{ field('reg_first_name', 'first_name', _('First name'), 'text', rf.first_name, re_.first_name, 'letters',
                      'maxlength="50" autocomplete="given-name"') }}
-            {{ field('reg_last_name', 'last_name', 'Last name', 'text', rf.last_name, re_.last_name, 'letters',
+            {{ field('reg_last_name', 'last_name', _('Last name'), 'text', rf.last_name, re_.last_name, 'letters',
                      'maxlength="50" autocomplete="family-name"') }}
-            {{ field('reg_phone', 'phone', 'Phone number', 'tel', rf.phone, re_.phone, 'digits',
+            {{ field('reg_phone', 'phone', _('Phone number'), 'tel', rf.phone, re_.phone, 'digits',
                      'inputmode="numeric" maxlength="15" autocomplete="tel"') }}
-            {{ field('reg_password', 'password', 'Create a password', 'password', '', re_.password, '',
+            {{ field('reg_password', 'password', _('Create a password'), 'password', '', re_.password, '',
                      'minlength="8" maxlength="128" autocomplete="new-password"',
-                     'At least 8 characters, with both letters and digits.') }}
-            <button class="primary-button" type="submit" style="width: 100%;">Create account</button>
+                     _('At least 8 characters, with both letters and digits.')) }}
+            <button class="primary-button" type="submit" style="width: 100%;">{{ _('Create account') }}</button>
         </form>
 
         <!-- BARBER -->
         <form id="panel-barber" class="booking-form auth-panel" style="grid-template-columns: 1fr;"
               action="{{ url_for('barber_login') }}" method="POST" {% if tab != 'barber' %}hidden{% endif %}>
-            <p class="auth-note">Barber accounts are created by the administrator. Use the password you were given.</p>
-            {{ field('barber_first_name', 'first_name', 'First name', 'text', bf.first_name, be.first_name, '',
+            <p class="auth-note">{{ _('Barber accounts are created by the administrator. Use the password you were given.') }}</p>
+            {{ field('barber_first_name', 'first_name', _('First name'), 'text', bf.first_name, be.first_name, '',
                      'maxlength="50"') }}
-            {{ field('barber_last_name', 'last_name', 'Last name', 'text', bf.last_name, be.last_name, '',
+            {{ field('barber_last_name', 'last_name', _('Last name'), 'text', bf.last_name, be.last_name, '',
                      'maxlength="50"') }}
-            {{ field('barber_password', 'password', 'Password', 'password', '', '', '',
+            {{ field('barber_password', 'password', _('Password'), 'password', '', '', '',
                      'autocomplete="current-password"') }}
-            <button class="primary-button" type="submit" style="width: 100%;">Log in as barber</button>
+            <button class="primary-button" type="submit" style="width: 100%;">{{ _('Log in as barber') }}</button>
         </form>
     </main>
 
@@ -132,11 +134,11 @@
             var rules = {
                 digits: {
                     bad: /[^0-9]/g,
-                    message: 'Digits only. Letters and symbols are not allowed here.'
+                    message: {{ _('Digits only. Letters and symbols are not allowed here.')|tojson }}
                 },
                 letters: {
                     bad: /[^\p{L}]/gu,
-                    message: 'Letters only. Digits, spaces and symbols are not allowed here.'
+                    message: {{ _('Letters only. Digits, spaces and symbols are not allowed here.')|tojson }}
                 }
             };
 
@@ -161,11 +163,11 @@
                 var pw = passwordInput.value;
                 var message = '';
                 if (pw.length < 8) {
-                    message = 'Password must be at least 8 characters long.';
+                    message = {{ _('Password must be at least 8 characters long.')|tojson }};
                 } else if (!/\p{L}/u.test(pw)) {
-                    message = 'Password must contain at least one letter.';
+                    message = {{ _('Password must contain at least one letter.')|tojson }};
                 } else if (!/[0-9]/.test(pw)) {
-                    message = 'Password must contain at least one digit.';
+                    message = {{ _('Password must contain at least one digit.')|tojson }};
                 }
                 if (message) {
                     event.preventDefault();
@@ -176,5 +178,7 @@
             passwordInput.addEventListener('input', function () { setError(passwordInput, ''); });
         })();
     </script>
+
+    <script src="{{ url_for('static', filename='ui.js') }}" defer></script>
 </body>
 </html>
