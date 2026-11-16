@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS Services (
     service_name TEXT NOT NULL UNIQUE,
     price REAL NOT NULL CHECK (price >= 0),
     duration_minutes INTEGER NOT NULL
-        CHECK (duration_minutes > 0)
+        CHECK (duration_minutes > 0),
+    -- Optional display names; empty = built-in translation / English name
+    name_ru TEXT,
+    name_kk TEXT,
+    -- 0 = removed by the admin: not bookable, old bookings keep its name
+    is_active INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS Appointments (

@@ -56,6 +56,29 @@ def t(text, **kwargs):
     return text.format(**kwargs) if kwargs else text
 
 
+def service_label(service):
+    """
+    Display name of a service (a DB row, a dict or just the English name):
+    the admin's own name for the current language (name_ru / name_kk),
+    else the built-in translation below, else the English name.
+    """
+    if isinstance(service, str):
+        return t(service)
+
+    def field(key):
+        try:
+            return service[key]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    lang = get_lang()
+    if lang != DEFAULT_LANG:
+        own = field("name_" + lang)
+        if own and str(own).strip():
+            return str(own).strip()
+    return t(field("service_name") or "")
+
+
 def plural_index(lang, n):
     if lang == "ru":
         if n % 10 == 1 and n % 100 != 11:
@@ -105,6 +128,11 @@ PLURALS = {
         "en": ("{n} completed service", "{n} completed services"),
         "ru": ("{n} выполненная услуга", "{n} выполненные услуги", "{n} выполненных услуг"),
         "kk": ("{n} орындалған қызмет",),
+    },
+    "{n} upcoming booking": {
+        "en": ("{n} upcoming booking", "{n} upcoming bookings"),
+        "ru": ("{n} предстоящая запись", "{n} предстоящие записи", "{n} предстоящих записей"),
+        "kk": ("{n} алдағы жазылу",),
     },
     "{n} working hour blocked": {
         "en": ("{n} working hour blocked", "{n} working hours blocked"),
@@ -626,4 +654,65 @@ TRANSLATIONS = {
     "Barber removed successfully.": {"ru": "Барбер удалён.", "kk": "Барбер сәтті жойылды."},
     "Database error occurred while deleting barber.": {"ru": "Ошибка базы данных при удалении барбера.",
                                                        "kk": "Барберді жою кезінде дерекқор қатесі орын алды."},
+
+    # ---------- Admin: manage services ----------
+    "Price list": {"ru": "Прайс-лист", "kk": "Баға тізімі"},
+    "Manage services": {"ru": "Управление услугами", "kk": "Қызметтерді басқару"},
+    "Removed services disappear from the booking forms; existing bookings and revenue keep them.": {
+        "ru": "Удалённые услуги исчезают из форм записи; существующие записи и выручка их сохраняют.",
+        "kk": "Жойылған қызметтер жазылу формаларынан жоғалады; бар жазылулар мен табыс оларды сақтайды."},
+    "Service name (English)": {"ru": "Название услуги (на английском)", "kk": "Қызмет атауы (ағылшынша)"},
+    "e.g., Beard Coloring": {"ru": "например, Beard Coloring", "kk": "мысалы, Beard Coloring"},
+    "Name in Russian (optional)": {"ru": "Название на русском (необязательно)",
+                                   "kk": "Орысша атауы (міндетті емес)"},
+    "Name in Kazakh (optional)": {"ru": "Название на казахском (необязательно)",
+                                  "kk": "Қазақша атауы (міндетті емес)"},
+    "Price, KZT": {"ru": "Цена, ₸", "kk": "Бағасы, ₸"},
+    "Duration, minutes": {"ru": "Длительность, минут", "kk": "Ұзақтығы, минут"},
+    "Start times are every 30 minutes, but a service can take any number of minutes ({min}–{max}).": {
+        "ru": "Время начала — каждые 30 минут, но услуга может длиться любое число минут ({min}–{max}).",
+        "kk": "Басталу уақыты әр 30 минут сайын, бірақ қызмет кез келген минутқа созылуы мүмкін ({min}–{max})."},
+    "Add service": {"ru": "Добавить услугу", "kk": "Қызмет қосу"},
+    "Not bookable": {"ru": "Запись закрыта", "kk": "Жазылу жабық"},
+    "Remove {name} from booking? Clients will no longer be able to choose it. Existing bookings stay as they are ({bookings}).": {
+        "ru": "Убрать «{name}» из записи? Клиенты больше не смогут её выбрать. Существующие записи сохранятся ({bookings}).",
+        "kk": "«{name}» қызметін жазылудан алып тастау керек пе? Клиенттер оны енді таңдай алмайды. Бар жазылулар өзгеріссіз қалады ({bookings})."},
+    "Remove {name}? Clients will no longer be able to choose it.": {
+        "ru": "Удалить «{name}»? Клиенты больше не смогут её выбрать.",
+        "kk": "«{name}» қызметін жою керек пе? Клиенттер оны енді таңдай алмайды."},
+    "Restore": {"ru": "Восстановить", "kk": "Қалпына келтіру"},
+    "No services yet.": {"ru": "Услуг пока нет.", "kk": "Әзірге қызметтер жоқ."},
+    "Please enter the service name in English.": {"ru": "Введите название услуги на английском.",
+                                                  "kk": "Қызмет атауын ағылшынша енгізіңіз."},
+    "Service names must be {min}–{max} characters long.": {
+        "ru": "Название услуги должно содержать от {min} до {max} символов.",
+        "kk": "Қызмет атауы {min}–{max} таңбадан тұруы керек."},
+    "Please enter the price as a number.": {"ru": "Укажите цену числом.", "kk": "Бағаны санмен көрсетіңіз."},
+    "The price must be between 0 and {max} KZT.": {"ru": "Цена должна быть от 0 до {max} ₸.",
+                                                   "kk": "Баға 0 мен {max} ₸ аралығында болуы керек."},
+    "Please enter the duration as a whole number of minutes.": {
+        "ru": "Укажите длительность целым числом минут.",
+        "kk": "Ұзақтығын минуттың бүтін санымен көрсетіңіз."},
+    "The duration must be between {min} and {max} minutes.": {
+        "ru": "Длительность должна быть от {min} до {max} минут.",
+        "kk": "Ұзақтығы {min} мен {max} минут аралығында болуы керек."},
+    "A removed service with this name already exists. Restore it instead.": {
+        "ru": "Удалённая услуга с таким названием уже есть. Восстановите её вместо создания новой.",
+        "kk": "Осындай атаумен жойылған қызмет бар. Жаңасын қосудың орнына оны қалпына келтіріңіз."},
+    "A service with this name already exists.": {"ru": "Услуга с таким названием уже есть.",
+                                                 "kk": "Осындай атаумен қызмет бұрыннан бар."},
+    "Service {name} added.": {"ru": "Услуга «{name}» добавлена.", "kk": "«{name}» қызметі қосылды."},
+    "Database error occurred while saving the service.": {
+        "ru": "Ошибка базы данных при сохранении услуги.",
+        "kk": "Қызметті сақтау кезінде дерекқор қатесі орын алды."},
+    "Service not found.": {"ru": "Услуга не найдена.", "kk": "Қызмет табылмады."},
+    "Service {name} removed from booking. Existing bookings keep it.": {
+        "ru": "Услуга «{name}» убрана из записи. Существующие записи её сохраняют.",
+        "kk": "«{name}» қызметі жазылудан алынды. Бар жазылуларда ол сақталады."},
+    "Service {name} deleted.": {"ru": "Услуга «{name}» удалена.", "kk": "«{name}» қызметі жойылды."},
+    "Service {name} can be booked again.": {"ru": "На услугу «{name}» снова можно записаться.",
+                                            "kk": "«{name}» қызметіне қайта жазылуға болады."},
+    "One of the selected services is no longer offered. Please choose another one.": {
+        "ru": "Одна из выбранных услуг больше не предоставляется. Выберите другую.",
+        "kk": "Таңдалған қызметтердің бірі енді көрсетілмейді. Басқасын таңдаңыз."},
 }

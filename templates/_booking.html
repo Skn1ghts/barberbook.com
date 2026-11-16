@@ -50,7 +50,7 @@ data-reason-overlap="{{ _('not enough time (overlaps the next booking)') }}"
                        data-role="service"
                        data-duration="{{ service.duration_minutes }}"
                        data-price="{{ '%.0f'|format(service.price) }}">
-                <span class="service-option-name">{{ _(service.service_name) }}</span>
+                <span class="service-option-name">{{ service_label(service) }}</span>
                 <span class="service-option-meta">{{ money(service.price) }} · {{ minutes(service.duration_minutes) }}</span>
             </label>
         {% endfor %}

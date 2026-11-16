@@ -22,7 +22,7 @@ from werkzeug.exceptions import HTTPException
 
 from translations import (
     LANGUAGES, LANG_COOKIE, LANG_COOKIE_MAX_AGE,
-    get_lang, t, tn, money, minutes
+    get_lang, t, tn, money, minutes, service_label
 )
 
 app = Flask(__name__)
@@ -51,7 +51,7 @@ check_templates()
 # Every template (also macros imported from _booking.html) can use
 # _("text") / t("text", name=...), tn("{n} rating", count), money(4000), minutes(45).
 app.jinja_env.globals.update(_=t, t=t, tn=tn, money=money, minutes=minutes,
-                             LANGUAGES=LANGUAGES)
+                             service_label=service_label, LANGUAGES=LANGUAGES)
 
 
 @app.context_processor
@@ -167,6 +167,15 @@ def migrate_db():
                 FOREIGN KEY (service_id) REFERENCES Services(service_id) ON DELETE CASCADE
             )
         """)
+
+        # Services: names in Russian / Kazakh set by the admin, and a
+        # "removed" flag (is_active = 0) that keeps old bookings intact
+        service_cols = columns("Services")
+        for col in ("name_ru", "name_kk"):
+            if col not in service_cols:
+                conn.execute(f"ALTER TABLE Services ADD COLUMN {col} TEXT")
+        if "is_active" not in service_cols:
+            conn.execute("ALTER TABLE Services ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
 
         # Barber ratings (1-5 stars, one per client per barber)
         conn.execute("""
@@ -481,9 +490,10 @@ BOOKING_PRICE_SQL = """COALESCE(
 
 
 def offered_services(conn):
-    """Services a client can book (never the internal 'System Break')."""
+    """Services a client can book (active ones, never the internal 'System Break')."""
     return conn.execute(
-        "SELECT * FROM Services WHERE service_name != ? ORDER BY service_id",
+        "SELECT * FROM Services WHERE service_name != ? AND is_active = 1 "
+        "ORDER BY service_id",
         (BREAK_SERVICE,)
     ).fetchall()
 
@@ -608,6 +618,8 @@ def selected_services(conn, form):
     by_id = {row["service_id"]: row for row in rows}
     if len(by_id) != len(ids):
         return None, t("One of the selected services does not exist.")
+    if any(not row["is_active"] for row in rows):
+        return None, t("One of the selected services is no longer offered. Please choose another one.")
     return [by_id[i] for i in ids], None
 
 
@@ -650,6 +662,8 @@ BOOKING_LIST_COLUMNS = """
     Appointments.status,
     Appointments.duration_minutes AS appt_minutes,
     Services.service_name AS service_name,
+    Services.name_ru AS service_name_ru,
+    Services.name_kk AS service_name_kk,
     Services.price AS price,
     Services.duration_minutes AS service_minutes
 """
@@ -668,6 +682,7 @@ def with_services(conn, rows):
         marks = ",".join("?" * len(chunk))
         for s in conn.execute(f"""
             SELECT aps.appointment_id, Services.service_id, Services.service_name,
+                   Services.name_ru, Services.name_kk,
                    Services.price, Services.duration_minutes
             FROM AppointmentServices AS aps
             JOIN Services ON Services.service_id = aps.service_id
@@ -681,6 +696,8 @@ def with_services(conn, rows):
         services = by_appt.get(row["appointment_id"]) or [{
             "service_id": row["service_id"],
             "service_name": row["service_name"],
+            "name_ru": row["service_name_ru"],
+            "name_kk": row["service_name_kk"],
             "price": row["price"],
             "duration_minutes": row["service_minutes"],
         }]
@@ -689,7 +706,7 @@ def with_services(conn, rows):
 
         total_minutes = row["appt_minutes"] or sum(s["duration_minutes"] for s in services)
         item["services"] = services
-        item["service_names"] = " + ".join(t(s["service_name"]) for s in services)
+        item["service_names"] = " + ".join(service_label(s) for s in services)
         item["total_minutes"] = total_minutes
         item["total_price"] = sum(s["price"] for s in services)
         item["end_time"] = fmt_hm(to_minutes(row["appointment_time"]) + total_minutes)
@@ -968,7 +985,7 @@ def book():
         print("Appointments count:", count)
 
         end_time = fmt_hm(to_minutes(appointment_time) + total)
-        names = " + ".join(t(s["service_name"]) for s in services)
+        names = " + ".join(service_label(s) for s in services)
         done = t(
             "Appointment booked successfully! {date}, {start}–{end}: {services} ({minutes} min).",
             date=appointment_date, start=appointment_time, end=end_time,
@@ -1632,6 +1649,7 @@ def admin():
         barbers = barbers_with_ratings(conn)
 
         services = offered_services(conn)
+        managed_services = services_for_admin(conn, today_str)
 
         # Clients for the "Add an appointment" form (not the hidden break client)
         customers = conn.execute(f"""
@@ -1674,6 +1692,8 @@ def admin():
             appointments=appointments,
             barbers=barbers,
             services=services,
+            managed_services=managed_services,
+            service_limits=SERVICE_LIMITS,
             booking_times=BOOKING_TIMES,
             min_duration=min((s["duration_minutes"] for s in services), default=SLOT_MINUTES),
             customers=customers,
@@ -1805,7 +1825,7 @@ def add_appointment():
         conn.commit()
         create_backup()
         end_time = fmt_hm(to_minutes(appointment_time) + total)
-        names = " + ".join(t(s["service_name"]) for s in services)
+        names = " + ".join(service_label(s) for s in services)
         flash(t(
             "Appointment added for {client}: {date}, {start}–{end} with {barber} "
             "({services}, {minutes} min).",
@@ -2139,6 +2159,168 @@ def delete_barber(barber_id):
         conn.close()
 
     return redirect(url_for("admin"))
+
+
+# --------------------------------------------------
+# ADMIN: MANAGE SERVICES (add / remove / restore)
+# A service that bookings refer to is only deactivated (is_active = 0):
+# it can no longer be booked, but old bookings keep its name and price,
+# so revenue stays correct. A never-used service is deleted for good.
+# --------------------------------------------------
+
+SERVICE_LIMITS = {
+    "name_min": 2, "name_max": 60,
+    "minutes_min": 5, "minutes_max": 480,
+    "price_max": 1000000,
+}
+
+# Bookings (any status, any date) that use a service, as main or extra service
+SERVICE_USE_SQL = """
+    SELECT COUNT(*) FROM Appointments AS a
+    WHERE (a.service_id = Services.service_id
+           OR EXISTS (SELECT 1 FROM AppointmentServices AS aps
+                      WHERE aps.appointment_id = a.appointment_id
+                        AND aps.service_id = Services.service_id))
+"""
+
+
+def services_for_admin(conn, today_str):
+    """All services except 'System Break', active ones first, with
+    upcoming = number of upcoming 'Booked' appointments using them."""
+    return conn.execute(f"""
+        SELECT Services.*,
+               ({SERVICE_USE_SQL}
+                  AND a.status = 'Booked' AND a.appointment_date >= ?) AS upcoming
+        FROM Services
+        WHERE service_name != ?
+        ORDER BY is_active DESC, service_id
+    """, (today_str, BREAK_SERVICE)).fetchall()
+
+
+def services_back(message, category="error"):
+    flash(message, category)
+    return redirect(url_for("admin") + "#services")
+
+
+@app.route("/admin/services/add", methods=["POST"])
+@login_required
+def add_service():
+    name = " ".join(request.form.get("service_name", "").split())
+    name_ru = " ".join(request.form.get("name_ru", "").split())
+    name_kk = " ".join(request.form.get("name_kk", "").split())
+    price_raw = request.form.get("price", "").strip().replace(",", ".")
+    minutes_raw = request.form.get("duration_minutes", "").strip()
+    lim = SERVICE_LIMITS
+
+    if not name:
+        return services_back(t("Please enter the service name in English."))
+    for value in (name, name_ru, name_kk):
+        if value and not lim["name_min"] <= len(value) <= lim["name_max"]:
+            return services_back(t("Service names must be {min}–{max} characters long.",
+                                   min=lim["name_min"], max=lim["name_max"]))
+
+    try:
+        price = float(price_raw)
+        if price != price or price in (float("inf"), float("-inf")):
+            raise ValueError
+    except ValueError:
+        return services_back(t("Please enter the price as a number."))
+    if not 0 <= price <= lim["price_max"]:
+        return services_back(t("The price must be between 0 and {max} KZT.", max=lim["price_max"]))
+
+    try:
+        duration = int(minutes_raw)
+    except ValueError:
+        return services_back(t("Please enter the duration as a whole number of minutes."))
+    if not lim["minutes_min"] <= duration <= lim["minutes_max"]:
+        return services_back(t("The duration must be between {min} and {max} minutes.",
+                               min=lim["minutes_min"], max=lim["minutes_max"]))
+
+    conn = get_db()
+    try:
+        # Names are unique (also against removed services and 'System Break')
+        same = conn.execute(
+            "SELECT is_active FROM Services WHERE lower(service_name) = lower(?)", (name,)
+        ).fetchone()
+        if same is not None:
+            if not same["is_active"] and name.lower() != BREAK_SERVICE.lower():
+                return services_back(t("A removed service with this name already exists. Restore it instead."))
+            return services_back(t("A service with this name already exists."))
+
+        conn.execute("""
+            INSERT INTO Services (service_name, name_ru, name_kk, price,
+                                  duration_minutes, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (name, name_ru or None, name_kk or None, price, duration))
+        conn.commit()
+        create_backup()
+        label = service_label({"service_name": name, "name_ru": name_ru, "name_kk": name_kk})
+        return services_back(t("Service {name} added.", name=label), "success")
+    except sqlite3.Error as error:
+        conn.rollback()
+        print("ADD SERVICE ERROR:", error)
+        return services_back(t("Database error occurred while saving the service."))
+    finally:
+        conn.close()
+
+
+def find_service(conn, service_id):
+    """The service row, or None for unknown ids and the internal 'System Break'."""
+    row = conn.execute("SELECT * FROM Services WHERE service_id = ?", (service_id,)).fetchone()
+    if row is None or row["service_name"] == BREAK_SERVICE:
+        return None
+    return row
+
+
+@app.route("/admin/services/<int:service_id>/delete", methods=["POST"])
+@login_required
+def delete_service(service_id):
+    conn = get_db()
+    try:
+        service = find_service(conn, service_id)
+        if service is None:
+            return services_back(t("Service not found."))
+        label = service_label(service)
+
+        used = conn.execute(f"""
+            SELECT ({SERVICE_USE_SQL}) FROM Services WHERE service_id = ?
+        """, (service_id,)).fetchone()[0]
+        if used:
+            conn.execute("UPDATE Services SET is_active = 0 WHERE service_id = ?", (service_id,))
+            message = t("Service {name} removed from booking. Existing bookings keep it.", name=label)
+        else:
+            conn.execute("DELETE FROM Services WHERE service_id = ?", (service_id,))
+            message = t("Service {name} deleted.", name=label)
+        conn.commit()
+        create_backup()
+        return services_back(message, "success")
+    except sqlite3.Error as error:
+        conn.rollback()
+        print("DELETE SERVICE ERROR:", error)
+        return services_back(t("Database error occurred while saving the service."))
+    finally:
+        conn.close()
+
+
+@app.route("/admin/services/<int:service_id>/restore", methods=["POST"])
+@login_required
+def restore_service(service_id):
+    conn = get_db()
+    try:
+        service = find_service(conn, service_id)
+        if service is None:
+            return services_back(t("Service not found."))
+        conn.execute("UPDATE Services SET is_active = 1 WHERE service_id = ?", (service_id,))
+        conn.commit()
+        create_backup()
+        return services_back(t("Service {name} can be booked again.", name=service_label(service)),
+                             "success")
+    except sqlite3.Error as error:
+        conn.rollback()
+        print("RESTORE SERVICE ERROR:", error)
+        return services_back(t("Database error occurred while saving the service."))
+    finally:
+        conn.close()
 
 
 @app.route("/update_status/<int:appointment_id>", methods=["POST"])

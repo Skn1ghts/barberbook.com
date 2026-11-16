@@ -316,6 +316,81 @@
             </div>
         </div>
 
+        <!-- Service Management Section -->
+        <div class="section-heading" id="services" style="margin-top: 50px;">
+            <p class="eyebrow">{{ _('Price list') }}</p>
+            <h2>{{ _('Manage services') }}</h2>
+            <p>{{ _('Removed services disappear from the booking forms; existing bookings and revenue keep them.') }}</p>
+        </div>
+
+        <div class="stack-mobile" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 50px;">
+            <!-- Add Service Form -->
+            <form action="{{ url_for('add_service') }}" method="POST" class="booking-form" id="service-form" style="grid-template-columns: 1fr; padding: 25px;">
+                <div class="field">
+                    <label for="svc_name">{{ _('Service name (English)') }}</label>
+                    <input id="svc_name" type="text" name="service_name" required minlength="{{ service_limits.name_min }}" maxlength="{{ service_limits.name_max }}" placeholder="{{ _('e.g., Beard Coloring') }}">
+                </div>
+                <div class="stack-mobile" style="display: flex; gap: 15px;">
+                    <div class="field" style="flex: 1;">
+                        <label for="svc_name_ru">{{ _('Name in Russian (optional)') }}</label>
+                        <input id="svc_name_ru" type="text" name="name_ru" lang="ru" minlength="{{ service_limits.name_min }}" maxlength="{{ service_limits.name_max }}">
+                    </div>
+                    <div class="field" style="flex: 1;">
+                        <label for="svc_name_kk">{{ _('Name in Kazakh (optional)') }}</label>
+                        <input id="svc_name_kk" type="text" name="name_kk" lang="kk" minlength="{{ service_limits.name_min }}" maxlength="{{ service_limits.name_max }}">
+                    </div>
+                </div>
+                <div class="stack-mobile" style="display: flex; gap: 15px;">
+                    <div class="field" style="flex: 1;">
+                        <label for="svc_price">{{ _('Price, KZT') }}</label>
+                        <input id="svc_price" type="number" name="price" required min="0" max="{{ service_limits.price_max }}" step="any" inputmode="decimal" placeholder="4000">
+                    </div>
+                    <div class="field" style="flex: 1;">
+                        <label for="svc_minutes">{{ _('Duration, minutes') }}</label>
+                        <input id="svc_minutes" type="number" name="duration_minutes" required min="{{ service_limits.minutes_min }}" max="{{ service_limits.minutes_max }}" step="1" inputmode="numeric" placeholder="45">
+                    </div>
+                </div>
+                <small class="field-hint">{{ _('Start times are every 30 minutes, but a service can take any number of minutes ({min}–{max}).', min=service_limits.minutes_min, max=service_limits.minutes_max) }}</small>
+                <button type="submit" class="primary-button submit-button" style="width: 100%; margin-top: 10px;">+ {{ _('Add service') }}</button>
+            </form>
+
+            <!-- Services List -->
+            <div class="appointments-list" style="max-height: 520px; overflow-y: auto;">
+                {% for svc in managed_services %}
+                    <article class="appointment-card service-admin-card{% if not svc.is_active %} is-inactive{% endif %}" style="padding: 15px; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong style="font-size: 16px;">{{ svc.service_name }}</strong>
+                            {% if not svc.is_active %}<span class="service-tag service-inactive-tag">{{ _('Not bookable') }}</span>{% endif %}
+                            <p style="margin-top: 4px;">
+                                {% if svc.name_ru or svc.name_kk %}
+                                    {% if svc.name_ru %}RU: {{ svc.name_ru }}{% endif %}{% if svc.name_ru and svc.name_kk %} · {% endif %}{% if svc.name_kk %}KZ: {{ svc.name_kk }}{% endif %}<br>
+                                {% elif service_label(svc) != svc.service_name %}
+                                    {{ service_label(svc) }}<br>
+                                {% endif %}
+                                {{ money(svc.price) }} · {{ minutes(svc.duration_minutes) }} · {{ tn('{n} upcoming booking', svc.upcoming) }}
+                            </p>
+                        </div>
+                        {% if svc.is_active %}
+                            {% if svc.upcoming %}
+                                {% set question = _('Remove {name} from booking? Clients will no longer be able to choose it. Existing bookings stay as they are ({bookings}).', name=service_label(svc), bookings=tn('{n} upcoming booking', svc.upcoming)) %}
+                            {% else %}
+                                {% set question = _('Remove {name}? Clients will no longer be able to choose it.', name=service_label(svc)) %}
+                            {% endif %}
+                            <form action="{{ url_for('delete_service', service_id=svc.service_id) }}" method="POST" onsubmit='return confirm({{ question|tojson }});'>
+                                <button type="submit" class="text-action danger">[{{ _('Delete') }}]</button>
+                            </form>
+                        {% else %}
+                            <form action="{{ url_for('restore_service', service_id=svc.service_id) }}" method="POST">
+                                <button type="submit" class="text-action ok">[{{ _('Restore') }}]</button>
+                            </form>
+                        {% endif %}
+                    </article>
+                {% else %}
+                    <p>{{ _('No services yet.') }}</p>
+                {% endfor %}
+            </div>
+        </div>
+
     </main>
 
     {{ booking.script() }}

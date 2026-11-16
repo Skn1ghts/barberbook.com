@@ -1175,3 +1175,44 @@ body.loaded #loader-wrapper {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* ---------- Admin: manage services ---------- */
+.text-action {
+    background: none;
+    border: none;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    color: var(--ink);
+    transition: background-color 0.15s ease;
+}
+
+.text-action:hover {
+    background: var(--surface-2);
+}
+
+.text-action.danger {
+    color: var(--danger);
+}
+
+.text-action.ok {
+    color: var(--accent-ink);
+}
+
+.service-admin-card.is-inactive {
+    background: var(--surface-2);
+    border-style: dashed;
+}
+
+.service-admin-card.is-inactive strong {
+    color: var(--muted);
+}
+
+.service-inactive-tag {
+    margin-left: 6px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    vertical-align: middle;
+}
