@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BarberBook | Book your appointment</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% import "_booking.html" as booking %}
     <style>
         .stars { display: inline-flex; flex-direction: row-reverse; gap: 2px; }
         .stars button { background: none; border: none; padding: 0 2px; font-size: 30px; line-height: 1; cursor: pointer; color: #d0cfc6; transition: color .1s; }
@@ -100,7 +101,7 @@
                 {% endfor %}
             {% endwith %}
 
-            <form action="{{ url_for('book') }}" method="POST" class="booking-form">
+            <form action="{{ url_for('book') }}" method="POST" class="booking-form" id="booking-form" {{ booking.form_attrs(min_duration) }}>
                 <div class="field" style="grid-column: 1 / -1;">
                     <label>Booking as</label>
                     <p style="margin: 0;"><strong>{{ customer.full_name }}</strong> · {{ customer.phone }}</p>
@@ -108,7 +109,7 @@
 
                 <div class="field">
                     <label for="barber_id">Choose a barber</label>
-                    <select id="barber_id" name="barber_id" required>
+                    <select id="barber_id" name="barber_id" data-role="barber" required>
                         <option value="">Select barber</option>
                         {% for barber in barbers %}
                             <option value="{{ barber.barber_id }}">
@@ -119,17 +120,8 @@
                     </select>
                 </div>
 
-                <div class="field">
-                    <label for="service_id">Choose a service</label>
-                    <select id="service_id" name="service_id" required>
-                        <option value="">Select service</option>
-                        {% for service in services %}
-                            <option value="{{ service.service_id }}">
-                                {{ service.service_name }} — {{ "%.0f"|format(service.price) }} KZT
-                                ({{ service.duration_minutes }} min)
-                            </option>
-                        {% endfor %}
-                    </select>
+                <div class="field service-field">
+                    {{ booking.service_picker(services, "svc", "Choose services (one or more)") }}
                 </div>
 
                 <div class="field">
@@ -139,21 +131,17 @@
                         id="appointment_date"
                         name="appointment_date"
                         min="{{ today }}"
+                        data-role="date"
                         required
                     >
                 </div>
 
                 <div class="field">
                     <label for="appointment_time">Time</label>
-                    <select id="appointment_time" name="appointment_time" required>
-                        <option value="">Select time</option>
-                        {% for hour in range(9, 20) %}
-                            <option value="{{ '%02d:00'|format(hour) }}" data-label="{{ '%02d:00'|format(hour) }}">
-                                {{ '%02d:00'|format(hour) }}
-                            </option>
-                        {% endfor %}
+                    <select id="appointment_time" name="appointment_time" data-role="time" required>
+                        {{ booking.time_options(booking_times) }}
                     </select>
-                    <small id="time-hint" style="color: var(--muted);">Choose a barber and a date to see free hours.</small>
+                    <small id="time-hint" class="slot-hint" data-role="hint" aria-live="polite">Choose a barber and a date to see free times.</small>
                 </div>
 
                 <button class="primary-button submit-button" type="submit">
@@ -173,10 +161,10 @@
                 {% for appointment in upcoming %}
                     <article class="appointment-card" style="border-left: 5px solid #c9f269;">
                         <div>
-                            <strong>{{ appointment.appointment_date }} · {{ appointment.appointment_time }}</strong>
+                            <strong>{{ appointment.appointment_date }} · {{ appointment.appointment_time }}–{{ appointment.end_time }}</strong>
                             <p>
-                                {{ appointment.service_name }}
-                                ({{ appointment.duration_minutes }} min, {{ "%.0f"|format(appointment.price) }} KZT)
+                                {{ appointment.service_names }}
+                                ({{ appointment.total_minutes }} min, {{ "%.0f"|format(appointment.total_price) }} KZT)
                                 · Barber: {{ appointment.barber_name }}
                             </p>
                         </div>
@@ -201,8 +189,8 @@
                     {% for appointment in history %}
                         <article class="appointment-card" style="border-left: 5px solid #e5e4dc; opacity: 0.75;">
                             <div>
-                                <strong>{{ appointment.appointment_date }} · {{ appointment.appointment_time }}</strong>
-                                <p>{{ appointment.service_name }} · Barber: {{ appointment.barber_name }}</p>
+                                <strong>{{ appointment.appointment_date }} · {{ appointment.appointment_time }}–{{ appointment.end_time }}</strong>
+                                <p>{{ appointment.service_names }} ({{ appointment.total_minutes }} min, {{ "%.0f"|format(appointment.total_price) }} KZT) · Barber: {{ appointment.barber_name }}</p>
                             </div>
                             <span class="service-tag">
                                 {% if appointment.status == 'Booked' %}Missed{% else %}{{ appointment.status }}{% endif %}
@@ -288,90 +276,7 @@
         setTimeout(hideLoader, 1500); // safety net
 
         document.addEventListener('DOMContentLoaded', function() {
-            // --- 1. Dynamic Time Dropdown Logic (from earlier) ---
-            const dateInput = document.getElementById('appointment_date');
-            const timeSelect = document.getElementById('appointment_time');
-            
-            const barberSelect = document.getElementById('barber_id');
-            const hint = document.getElementById('time-hint');
-            let slots = null;   // hour -> free / booked / break / outside (from the server)
-            let requestId = 0;
-
-            const REASON = {
-                booked: 'already booked',
-                break: 'barber is off',
-                outside: 'not working',
-                past: 'past'
-            };
-
-            function localTodayStr() {
-                const d = new Date();
-                const pad = n => String(n).padStart(2, '0');
-                return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-            }
-
-            // Disable every hour that cannot be booked and say why.
-            function renderTimes() {
-                if (!dateInput || !timeSelect) return;
-                const isToday = dateInput.value === localTodayStr();
-                const currentHour = new Date().getHours();
-                let freeCount = 0;
-
-                for (let i = 1; i < timeSelect.options.length; i++) {
-                    const option = timeSelect.options[i];
-                    const label = option.dataset.label || option.value;
-                    const hour = parseInt(option.value.split(':')[0], 10);
-                    let reason = null;
-
-                    if (isToday && hour <= currentHour) reason = 'past';
-                    else if (slots && slots[option.value] && slots[option.value] !== 'free') reason = slots[option.value];
-
-                    option.disabled = reason !== null;
-                    option.textContent = reason ? label + ' (' + REASON[reason] + ')' : label;
-                    if (reason === null) freeCount++;
-                    if (reason !== null && option.selected) timeSelect.value = '';
-                }
-
-                if (hint) {
-                    if (!barberSelect.value || !dateInput.value) {
-                        hint.textContent = 'Choose a barber and a date to see free hours.';
-                    } else if (!slots) {
-                        hint.textContent = 'Checking free hours...';
-                    } else if (freeCount === 0) {
-                        hint.textContent = 'No free hours on this day. Try another date or barber.';
-                    } else {
-                        hint.textContent = freeCount + ' free hour(s). Unavailable hours are greyed out.';
-                    }
-                }
-            }
-
-            function updateAvailableTimes() {
-                if (!dateInput || !timeSelect) return;
-                slots = null;
-                renderTimes();
-                if (!barberSelect.value || !dateInput.value) return;
-
-                const myRequest = ++requestId;
-                const url = '{{ url_for("availability") }}?barber_id=' +
-                    encodeURIComponent(barberSelect.value) + '&date=' + encodeURIComponent(dateInput.value);
-                fetch(url, { credentials: 'same-origin' })
-                    .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                    .then(data => {
-                        if (myRequest !== requestId) return;   // a newer choice was made
-                        slots = data.slots;
-                        renderTimes();
-                    })
-                    .catch(() => {
-                        if (myRequest !== requestId) return;
-                        if (hint) hint.textContent = 'Could not load free hours. The server will still check your choice.';
-                    });
-            }
-
-            if (dateInput) {
-                dateInput.addEventListener('change', updateAvailableTimes);
-                if (barberSelect) barberSelect.addEventListener('change', updateAvailableTimes);
-                updateAvailableTimes();
-            }
+            // (Free times and the services summary: see _booking.html)
 
             // --- 2. Notification Sound Logic ---
             const successMessage = document.querySelector('.message.success');
@@ -403,6 +308,8 @@
                 });
             }
     </script>
+
+    {{ booking.script() }}
 
     <footer>
         <a class="logo" href="/">

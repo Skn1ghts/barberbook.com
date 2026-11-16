@@ -1,0 +1,232 @@
+{#
+    Shared pieces of the booking forms (client page and admin "Add an appointment").
+    Usage:
+        {% import "_booking.html" as booking %}
+        <form ... {{ booking.form_attrs(min_duration) }}>
+            {{ booking.service_picker(services, "svc") }}
+            <select data-role="time">{{ booking.time_options(booking_times) }}</select>
+            <small class="slot-hint" data-role="hint"></small>
+        </form>
+        {{ booking.script() }}
+
+    All texts the script shows are data-* attributes below, so they can be
+    translated in this template without touching JavaScript.
+    Placeholders in {curly} braces are filled in by the script.
+#}
+
+{% macro form_attrs(min_duration) -%}
+data-booking-form
+data-availability-url="{{ url_for('availability') }}"
+data-min-duration="{{ min_duration }}"
+data-msg-total="Total: {minutes} min · {price} KZT"
+data-msg-total-empty="No services selected yet."
+data-msg-visit="Your visit: {start}–{end}"
+data-msg-no-service="Please choose at least one service."
+data-msg-pick="Choose a barber and a date to see free times."
+data-msg-loading="Checking free times..."
+data-msg-load-error="Could not load free times. The server will still check your choice."
+data-msg-free="{count} start time(s) available for {minutes} min. Unavailable times are greyed out."
+data-msg-none-fit="These services together take {minutes} min — no time left with this barber on this date; remove a service or pick another day."
+data-msg-none="No free time with this barber on this date. Try another date or barber."
+data-msg-time-dropped="{time} does not fit the chosen services any more. Please pick another time."
+data-reason-booked="booked"
+data-reason-break="barber is off"
+data-reason-outside="not working"
+data-reason-past="past"
+data-reason-too_long="not enough time (shift ends {work_end})"
+data-reason-overlap="not enough time (overlaps the next booking)"
+{%- endmacro %}
+
+{% macro service_picker(services, prefix, legend="Choose services") -%}
+<fieldset class="service-picker">
+    <legend>{{ legend }}</legend>
+    <div class="service-list">
+        {% for service in services %}
+            <label class="service-option" for="{{ prefix }}_{{ service.service_id }}">
+                <input type="checkbox"
+                       id="{{ prefix }}_{{ service.service_id }}"
+                       name="service_ids"
+                       value="{{ service.service_id }}"
+                       data-role="service"
+                       data-duration="{{ service.duration_minutes }}"
+                       data-price="{{ '%.0f'|format(service.price) }}">
+                <span class="service-option-name">{{ service.service_name }}</span>
+                <span class="service-option-meta">{{ "%.0f"|format(service.price) }} KZT · {{ service.duration_minutes }} min</span>
+            </label>
+        {% endfor %}
+    </div>
+    <p class="booking-summary" data-role="summary" aria-live="polite">No services selected yet.</p>
+</fieldset>
+{%- endmacro %}
+
+{% macro time_options(times, placeholder="Select time") -%}
+<option value="">{{ placeholder }}</option>
+{% for t in times %}
+    <option value="{{ t }}" data-label="{{ t }}">{{ t }}</option>
+{% endfor %}
+{%- endmacro %}
+
+{% macro script() -%}
+<style>
+    /* Layout only; colours and look come from style.css */
+    .booking-form .service-field { grid-column: 1 / -1; }
+    .service-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
+    .service-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+    .service-option { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; cursor: pointer; }
+    .service-option-meta { margin-left: auto; white-space: nowrap; }
+    .booking-summary, .slot-hint { margin: 6px 0 0; }
+</style>
+<script>
+(function () {
+    function fill(template, values) {
+        return (template || '').replace(/\{(\w+)\}/g, function (m, key) {
+            return key in values ? values[key] : m;
+        });
+    }
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function toMinutes(t) { var p = t.split(':'); return parseInt(p[0], 10) * 60 + parseInt(p[1], 10); }
+    function fmt(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+    function localToday() {
+        var d = new Date();
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    function initBookingForm(form) {
+        var msg = form.dataset;
+        var barberSelect = form.querySelector('[data-role="barber"]');
+        var dateInput = form.querySelector('[data-role="date"]');
+        var timeSelect = form.querySelector('[data-role="time"]');
+        var hint = form.querySelector('[data-role="hint"]');
+        var summary = form.querySelector('[data-role="summary"]');
+        var boxes = Array.prototype.slice.call(form.querySelectorAll('[data-role="service"]'));
+        var minDuration = parseInt(msg.minDuration, 10) || 30;
+
+        var data = null;      // last answer of /availability
+        var requestId = 0;
+        var dropped = null;   // a chosen time that stopped fitting
+
+        function selection() {
+            var minutes = 0, price = 0, count = 0;
+            boxes.forEach(function (b) {
+                if (b.checked) {
+                    minutes += parseInt(b.dataset.duration, 10) || 0;
+                    price += parseFloat(b.dataset.price) || 0;
+                    count++;
+                }
+            });
+            return { minutes: minutes, price: Math.round(price), count: count };
+        }
+
+        function renderSummary() {
+            var sel = selection();
+            if (boxes.length) {
+                boxes[0].setCustomValidity(sel.count ? '' : msg.msgNoService);
+            }
+            if (!summary) return;
+            if (!sel.count) { summary.textContent = msg.msgTotalEmpty; return; }
+            var text = fill(msg.msgTotal, { minutes: sel.minutes, price: sel.price });
+            if (timeSelect && timeSelect.value) {
+                var start = toMinutes(timeSelect.value);
+                text += ' · ' + fill(msg.msgVisit, { start: timeSelect.value, end: fmt(start + sel.minutes) });
+            }
+            summary.textContent = text;
+        }
+
+        function renderTimes() {
+            var sel = selection();
+            var isToday = dateInput && dateInput.value === localToday();
+            var now = new Date();
+            var nowMinutes = now.getHours() * 60 + now.getMinutes();
+            var freeCount = 0;
+
+            for (var i = 0; i < timeSelect.options.length; i++) {
+                var option = timeSelect.options[i];
+                if (!option.value) continue;
+                var label = option.dataset.label || option.value;
+                var state = data && data.slots ? (data.slots[option.value] || 'outside') : 'free';
+                if (isToday && toMinutes(option.value) <= nowMinutes) state = 'past';
+
+                var free = state === 'free';
+                option.disabled = !free;
+                // data-reason-too_long -> dataset.reasonToo_long
+                var reason = msg['reason' + state.charAt(0).toUpperCase() + state.slice(1)] || state;
+                option.textContent = free ? label
+                    : label + ' — ' + fill(reason, { work_end: data ? data.work_end : '' });
+                if (free) freeCount++;
+                if (!free && option.selected) {
+                    dropped = option.value;
+                    timeSelect.value = '';
+                }
+            }
+
+            if (!hint) return;
+            if (!barberSelect.value || !dateInput.value) {
+                hint.textContent = sel.count ? msg.msgPick : msg.msgNoService + ' ' + msg.msgPick;
+            } else if (!data) {
+                hint.textContent = msg.msgLoading;
+            } else if (freeCount === 0) {
+                hint.textContent = (sel.count && sel.minutes > minDuration && data.free_count_shortest > 0)
+                    ? fill(msg.msgNoneFit, { minutes: sel.minutes })
+                    : msg.msgNone;
+            } else {
+                hint.textContent = fill(msg.msgFree, { count: freeCount, minutes: data.duration });
+                if (dropped) hint.textContent = fill(msg.msgTimeDropped, { time: dropped }) + ' ' + hint.textContent;
+            }
+            if (!sel.count && barberSelect.value && dateInput.value) {
+                hint.textContent = msg.msgNoService + ' ' + hint.textContent;
+            }
+        }
+
+        function refresh() {
+            dropped = null;
+            renderSummary();
+            data = null;
+            renderTimes();
+            if (!barberSelect.value || !dateInput.value) return;
+
+            var sel = selection();
+            var duration = sel.count ? sel.minutes : minDuration;
+            var myRequest = ++requestId;
+            var url = msg.availabilityUrl +
+                '?barber_id=' + encodeURIComponent(barberSelect.value) +
+                '&date=' + encodeURIComponent(dateInput.value) +
+                '&duration=' + encodeURIComponent(duration);
+            fetch(url, { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+                .then(function (json) {
+                    if (myRequest !== requestId) return;   // a newer choice was made
+                    data = json;
+                    renderTimes();
+                    renderSummary();
+                })
+                .catch(function () {
+                    if (myRequest !== requestId) return;
+                    if (hint) hint.textContent = msg.msgLoadError;
+                });
+        }
+
+        boxes.forEach(function (b) { b.addEventListener('change', refresh); });
+        barberSelect.addEventListener('change', function () { dropped = null; refresh(); });
+        dateInput.addEventListener('change', function () { dropped = null; refresh(); });
+        timeSelect.addEventListener('change', function () { dropped = null; renderSummary(); renderTimes(); });
+
+        form.addEventListener('submit', function (event) {
+            renderSummary();
+            if (boxes.length && !selection().count) {
+                event.preventDefault();
+                boxes[0].reportValidity();
+                if (hint) hint.textContent = msg.msgNoService;
+            }
+        });
+
+        refresh();
+    }
+
+    function start() {
+        document.querySelectorAll('[data-booking-form]').forEach(initBookingForm);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+})();
+</script>
+{%- endmacro %}

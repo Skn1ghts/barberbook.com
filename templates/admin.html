@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>BarberBook | Schedule Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% import "_booking.html" as booking %}
 </head>
 <body>
     <header class="navbar">
@@ -34,12 +35,14 @@
                     <div class="wrap-mobile" style="display: flex; gap: 20px; align-items: center;">
                         <div style="min-width: 90px; font-weight: 700; font-size: 13px;">
                             {{ appt.appointment_date }}<br>
-                            {{ appt.appointment_time }}
+                            {{ appt.appointment_time }}–{{ appt.end_time }}
                         </div>
                         <div>
                             <strong style="font-size: 16px;">{{ appt.customer_name }}</strong>
                             <p style="margin-top: 4px;">
-                                Phone: {{ appt.customer_phone or '—' }} · Barber: {{ appt.barber_name }}
+                                Phone: {{ appt.customer_phone or '—' }} · Barber: {{ appt.barber_name }}<br>
+                                <span class="booking-services">{{ appt.service_names }}</span>
+                                · {{ appt.total_minutes }} min · {{ "%.0f"|format(appt.total_price) }} KZT
                             </p>
                         </div>
                     </div>
@@ -109,7 +112,7 @@
             <p>Book for a registered client, or for a walk-in client without an account (name only, phone is optional).</p>
         </div>
 
-        <form action="{{ url_for('add_appointment') }}" method="POST" class="booking-form stack-mobile" id="admin-appt-form" style="grid-template-columns: 1fr 1fr; padding: 25px;">
+        <form action="{{ url_for('add_appointment') }}" method="POST" class="booking-form stack-mobile" id="admin-appt-form" style="grid-template-columns: 1fr 1fr; padding: 25px;" {{ booking.form_attrs(min_duration) }}>
             <div class="field" style="grid-column: 1 / -1;">
                 <label>Client</label>
                 <div class="segmented" role="radiogroup" aria-label="Client type">
@@ -143,7 +146,7 @@
 
             <div class="field">
                 <label for="appt_barber">Barber</label>
-                <select id="appt_barber" name="barber_id" required>
+                <select id="appt_barber" name="barber_id" data-role="barber" required>
                     <option value="">Select barber</option>
                     {% for barber in barbers %}
                         <option value="{{ barber.barber_id }}">{{ barber.full_name }} ({{ barber.work_start }}-{{ barber.work_end }})</option>
@@ -151,25 +154,18 @@
                 </select>
             </div>
             <div class="field">
-                <label for="appt_service">Service</label>
-                <select id="appt_service" name="service_id" required>
-                    <option value="">Select service</option>
-                    {% for service in services %}
-                        <option value="{{ service.service_id }}">{{ service.service_name }} — {{ "%.0f"|format(service.price) }} KZT ({{ service.duration_minutes }} min)</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="field">
                 <label for="appt_date">Date</label>
-                <input id="appt_date" type="date" name="appointment_date" min="{{ today }}" required>
+                <input id="appt_date" type="date" name="appointment_date" min="{{ today }}" data-role="date" required>
             </div>
-            <div class="field">
+            <div class="field service-field">
+                {{ booking.service_picker(services, "appt_svc", "Services (one or more)") }}
+            </div>
+            <div class="field service-field">
                 <label for="appt_time">Time</label>
-                <select id="appt_time" name="appointment_time" required>
-                    {% for hour in range(9, 20) %}
-                        <option value="{{ '%02d:00'|format(hour) }}">{{ '%02d:00'|format(hour) }}</option>
-                    {% endfor %}
+                <select id="appt_time" name="appointment_time" data-role="time" required>
+                    {{ booking.time_options(booking_times) }}
                 </select>
+                <small class="slot-hint" data-role="hint" aria-live="polite">Choose a barber and a date to see free times.</small>
             </div>
             <button type="submit" class="primary-button submit-button" style="grid-column: 1 / -1;">+ Add appointment</button>
         </form>
@@ -318,6 +314,8 @@
         </div>
 
     </main>
+
+    {{ booking.script() }}
 
     <script>
         (function () {

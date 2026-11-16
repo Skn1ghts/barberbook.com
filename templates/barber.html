@@ -60,7 +60,7 @@
                     <div style="display: flex; gap: 20px; align-items: center;">
                         <div style="min-width: 90px; font-weight: 700; font-size: 13px;">
                             {{ appt.appointment_date }}<br>
-                            {{ appt.appointment_time }}
+                            {{ appt.appointment_time }}–{{ appt.end_time }}
                         </div>
                         <div>
                             {% if appt.service_name == 'System Break' %}
@@ -69,7 +69,9 @@
                             {% else %}
                                 <strong style="font-size: 16px;">{{ appt.customer_name }}</strong>
                                 <p style="margin-top: 4px;">
-                                    Phone: {{ appt.customer_phone or '—' }} · {{ appt.service_name }}
+                                    Phone: {{ appt.customer_phone or '—' }}<br>
+                                    <span class="booking-services">{{ appt.service_names }}</span>
+                                    · {{ appt.total_minutes }} min · {{ "%.0f"|format(appt.total_price) }} KZT
                                 </p>
                             {% endif %}
                         </div>

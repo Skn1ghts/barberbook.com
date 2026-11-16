@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS Appointments (
     status TEXT NOT NULL DEFAULT 'Booked'
         CHECK (status IN ('Booked', 'Completed', 'Cancelled')),
     break_group TEXT,
+    -- Total length of all services of the booking (NULL = length of service_id)
+    duration_minutes INTEGER CHECK (duration_minutes IS NULL OR duration_minutes > 0),
 
     FOREIGN KEY (customer_id)
         REFERENCES Customers(customer_id),
@@ -48,6 +50,18 @@ CREATE TABLE IF NOT EXISTS Appointments (
         REFERENCES Services(service_id),
 
     UNIQUE (barber_id, appointment_date, appointment_time)
+);
+
+-- Every service of one booking. Appointments.service_id stays the first
+-- (main) one; old bookings without rows here use Appointments.service_id.
+CREATE TABLE IF NOT EXISTS AppointmentServices (
+    appointment_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    PRIMARY KEY (appointment_id, service_id),
+    FOREIGN KEY (appointment_id)
+        REFERENCES Appointments(appointment_id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id)
+        REFERENCES Services(service_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS BarberRatings (

@@ -36,8 +36,10 @@ def check_templates():
 check_templates()
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "barbershop.sqlite"
-BACKUP_DIR = BASE_DIR / "backups"
+# Both can be overridden with environment variables (useful for testing
+# against a copy of the database); by default they live next to app.py.
+DB_PATH = Path(os.environ.get("BARBERBOOK_DB", BASE_DIR / "barbershop.sqlite"))
+BACKUP_DIR = Path(os.environ.get("BARBERBOOK_BACKUP_DIR", BASE_DIR / "backups"))
 MAX_BACKUPS = 7
 
 
@@ -101,6 +103,22 @@ def migrate_db():
         # Appointments: group id that ties together the hourly rows of one break
         if "break_group" not in columns("Appointments"):
             conn.execute("ALTER TABLE Appointments ADD COLUMN break_group TEXT")
+
+        # Appointments: total length of a booking with several services.
+        # NULL (old rows, breaks) = use the length of the main service.
+        if "duration_minutes" not in columns("Appointments"):
+            conn.execute("ALTER TABLE Appointments ADD COLUMN duration_minutes INTEGER")
+
+        # All services of one booking (Appointments.service_id stays the first one)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS AppointmentServices (
+                appointment_id INTEGER NOT NULL,
+                service_id INTEGER NOT NULL,
+                PRIMARY KEY (appointment_id, service_id),
+                FOREIGN KEY (appointment_id) REFERENCES Appointments(appointment_id) ON DELETE CASCADE,
+                FOREIGN KEY (service_id) REFERENCES Services(service_id) ON DELETE CASCADE
+            )
+        """)
 
         # Barber ratings (1-5 stars, one per client per barber)
         conn.execute("""
@@ -376,6 +394,256 @@ PHONE_FOR_DISPLAY = (
 
 
 # --------------------------------------------------
+# BOOKING TIME GRID, SEVERAL SERVICES, OVERLAP CHECKS
+# --------------------------------------------------
+
+BREAK_SERVICE = "System Break"
+SLOT_MINUTES = 30                 # start times: 09:00, 09:30, ... 19:30
+GRID_START = 9 * 60
+GRID_END = 20 * 60                # exclusive: no booking may start at 20:00
+BREAK_MINUTES = 60                # every break row blocks one hour
+MAX_SERVICES_PER_BOOKING = 6
+
+
+def to_minutes(hhmm):
+    """'13:30' -> 810"""
+    hours, minutes = hhmm.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def fmt_hm(minutes):
+    """810 -> '13:30'"""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+BOOKING_TIMES = [fmt_hm(m) for m in range(GRID_START, GRID_END, SLOT_MINUTES)]
+
+# Length of a stored appointment: its own total, else its main service's length
+APPT_MINUTES_SQL = "COALESCE(Appointments.duration_minutes, Services.duration_minutes)"
+
+# Price of a stored appointment: all its services; old rows without
+# AppointmentServices rows fall back to the main service.
+# (Needs Appointments JOIN Services in the outer query.)
+BOOKING_PRICE_SQL = """COALESCE(
+    (SELECT SUM(s2.price)
+       FROM AppointmentServices AS aps
+       JOIN Services AS s2 ON s2.service_id = aps.service_id
+      WHERE aps.appointment_id = Appointments.appointment_id),
+    Services.price)"""
+
+
+def offered_services(conn):
+    """Services a client can book (never the internal 'System Break')."""
+    return conn.execute(
+        "SELECT * FROM Services WHERE service_name != ? ORDER BY service_id",
+        (BREAK_SERVICE,)
+    ).fetchall()
+
+
+def busy_intervals(conn, barber_id, date, exclude_id=None):
+    """
+    Busy time of one barber on one date as sorted (start, end, kind) tuples in
+    minutes since midnight. kind is 'break' or 'booked'. Cancelled
+    appointments do not count.
+    """
+    rows = conn.execute(f"""
+        SELECT Appointments.appointment_id,
+               Appointments.appointment_time,
+               {APPT_MINUTES_SQL} AS minutes,
+               Services.service_name
+        FROM Appointments
+        JOIN Services ON Appointments.service_id = Services.service_id
+        WHERE Appointments.barber_id = ?
+          AND Appointments.appointment_date = ?
+          AND Appointments.status != 'Cancelled'
+    """, (barber_id, date)).fetchall()
+
+    result = []
+    for row in rows:
+        if exclude_id is not None and row["appointment_id"] == exclude_id:
+            continue
+        start = to_minutes(row["appointment_time"])
+        if row["service_name"] == BREAK_SERVICE:
+            result.append((start, start + BREAK_MINUTES, "break"))
+        else:
+            result.append((start, start + (row["minutes"] or SLOT_MINUTES), "booked"))
+    return sorted(result)
+
+
+def fits(start, total, barber, busy, date=None, now=None):
+    """
+    Can a block of `total` minutes start at `start` (minutes since midnight)?
+    Returns (ok, state, message). state is one of:
+      free, past, outside, booked, break,
+      too_long (would run past the end of the shift),
+      overlap  (would run into a later booking or break).
+    The past check is done only when `date` ('YYYY-MM-DD') is given.
+    """
+    work_start = to_minutes(barber["work_start"])
+    work_end = to_minutes(barber["work_end"])
+    end = start + total
+
+    if date is not None:
+        now = now or datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        if date < today or (date == today and start <= now.hour * 60 + now.minute):
+            return False, "past", "This time has already passed. Please choose a later time."
+
+    if not (work_start <= start < work_end):
+        return False, "outside", (
+            f"The barber works {barber['work_start']} - {barber['work_end']}. "
+            "Please choose a time in that range."
+        )
+
+    for b_start, b_end, kind in busy:
+        if b_start <= start < b_end:
+            if kind == "break":
+                return False, "break", "The barber is off at this time. Please choose another time."
+            return False, "booked", (
+                "This time is already booked by another client. Please choose another time."
+            )
+
+    if end > work_end:
+        return False, "too_long", (
+            f"Not enough time: the selected services take {total} min "
+            f"({fmt_hm(start)}–{fmt_hm(end)}), but the barber's shift ends at "
+            f"{barber['work_end']}. Choose an earlier time or fewer services."
+        )
+
+    for b_start, b_end, kind in busy:
+        if start < b_start < end:
+            what = "the barber's time off" if kind == "break" else "the next booking"
+            return False, "overlap", (
+                f"Not enough time: the selected services take {total} min "
+                f"({fmt_hm(start)}–{fmt_hm(end)}) and would overlap {what} "
+                f"at {fmt_hm(b_start)}. Choose another time or fewer services."
+            )
+
+    return True, "free", ""
+
+
+def selected_services(conn, form):
+    """
+    Services chosen in a booking form (checkboxes named service_ids; an old
+    single service_id field is accepted too). Returns (services, error).
+    The order of the form is kept: the first one becomes the main service.
+    """
+    raw = form.getlist("service_ids")
+    if not raw and form.get("service_id"):
+        raw = [form.get("service_id")]
+
+    ids = []
+    for value in raw:
+        try:
+            service_id = int(value)
+        except (TypeError, ValueError):
+            return None, "Please choose valid services."
+        if service_id not in ids:
+            ids.append(service_id)
+
+    if not ids:
+        return None, "Please choose at least one service."
+    if len(ids) > MAX_SERVICES_PER_BOOKING:
+        return None, f"Please choose at most {MAX_SERVICES_PER_BOOKING} services in one booking."
+
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT * FROM Services WHERE service_id IN ({marks}) AND service_name != ?",
+        (*ids, BREAK_SERVICE)
+    ).fetchall()
+    by_id = {row["service_id"]: row for row in rows}
+    if len(by_id) != len(ids):
+        return None, "One of the selected services does not exist."
+    return [by_id[i] for i in ids], None
+
+
+def insert_booking(conn, customer_id, barber_id, date, time_str, services):
+    """
+    Saves one booking with all its services. The caller has already checked
+    that the time fits. A cancelled appointment still holds the same start
+    time (UNIQUE rule), so it is removed first.
+    """
+    for (old_id,) in conn.execute("""
+        SELECT appointment_id FROM Appointments
+        WHERE barber_id = ? AND appointment_date = ?
+          AND appointment_time = ? AND status = 'Cancelled'
+    """, (barber_id, date, time_str)).fetchall():
+        conn.execute("DELETE FROM AppointmentServices WHERE appointment_id = ?", (old_id,))
+        conn.execute("DELETE FROM Appointments WHERE appointment_id = ?", (old_id,))
+
+    total = sum(s["duration_minutes"] for s in services)
+    appointment_id = conn.execute("""
+        INSERT INTO Appointments
+            (customer_id, barber_id, service_id, appointment_date,
+             appointment_time, status, duration_minutes)
+        VALUES (?, ?, ?, ?, ?, 'Booked', ?)
+    """, (customer_id, barber_id, services[0]["service_id"],
+          date, time_str, total)).lastrowid
+
+    conn.executemany(
+        "INSERT INTO AppointmentServices (appointment_id, service_id) VALUES (?, ?)",
+        [(appointment_id, s["service_id"]) for s in services]
+    )
+    return appointment_id
+
+
+# Columns every booking list query must select (used by with_services)
+BOOKING_LIST_COLUMNS = """
+    Appointments.appointment_id,
+    Appointments.service_id,
+    Appointments.appointment_date,
+    Appointments.appointment_time,
+    Appointments.status,
+    Appointments.duration_minutes AS appt_minutes,
+    Services.service_name AS service_name,
+    Services.price AS price,
+    Services.duration_minutes AS service_minutes
+"""
+
+
+def with_services(conn, rows):
+    """
+    Turns appointment rows into dicts with every service of the booking:
+    services (list), service_names ('Fade Haircut + Beard Trim'),
+    total_minutes, total_price and end_time.
+    """
+    ids = [row["appointment_id"] for row in rows]
+    by_appt = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for s in conn.execute(f"""
+            SELECT aps.appointment_id, Services.service_id, Services.service_name,
+                   Services.price, Services.duration_minutes
+            FROM AppointmentServices AS aps
+            JOIN Services ON Services.service_id = aps.service_id
+            WHERE aps.appointment_id IN ({marks})
+        """, chunk):
+            by_appt.setdefault(s["appointment_id"], []).append(dict(s))
+
+    result = []
+    for row in rows:
+        item = dict(row)
+        services = by_appt.get(row["appointment_id"]) or [{
+            "service_id": row["service_id"],
+            "service_name": row["service_name"],
+            "price": row["price"],
+            "duration_minutes": row["service_minutes"],
+        }]
+        # Main service first, the others in a fixed order
+        services.sort(key=lambda s: (s["service_id"] != row["service_id"], s["service_id"]))
+
+        total_minutes = row["appt_minutes"] or sum(s["duration_minutes"] for s in services)
+        item["services"] = services
+        item["service_names"] = " + ".join(s["service_name"] for s in services)
+        item["total_minutes"] = total_minutes
+        item["total_price"] = sum(s["price"] for s in services)
+        item["end_time"] = fmt_hm(to_minutes(row["appointment_time"]) + total_minutes)
+        result.append(item)
+    return result
+
+
+# --------------------------------------------------
 # AUTOMATIC BACKUP
 # --------------------------------------------------
 
@@ -446,6 +714,13 @@ def auto_cleanup():
             WHERE appointment_date || ' ' || appointment_time < ?
         """, (cutoff,))
 
+        # Service rows of deleted appointments (ON DELETE CASCADE does this
+        # too; this also cleans up anything left by older code)
+        conn.execute("""
+            DELETE FROM AppointmentServices
+            WHERE appointment_id NOT IN (SELECT appointment_id FROM Appointments)
+        """)
+
         # Delete orphan customers (customers with no remaining appointments)
         # Note: We exclude the 'Admin - Break' dummy customer (phone 0000000000) so breaks still work!
         conn.execute("""
@@ -485,11 +760,7 @@ def index():
         barbers = barbers_with_ratings(conn)
 
         # "System Break" is an internal service: never offer it to clients
-        services = conn.execute("""
-            SELECT * FROM Services
-            WHERE service_name != 'System Break'
-            ORDER BY service_id
-        """).fetchall()
+        services = offered_services(conn)
 
         # Barbers this client may rate (completed visit) + the client's ratings
         done_ids = {
@@ -509,16 +780,10 @@ def index():
         ]
 
         # Only THIS customer's appointments (old ones are removed by auto-cleanup)
-        my_appointments = conn.execute("""
+        my_appointments = with_services(conn, conn.execute(f"""
             SELECT
-                Appointments.appointment_id,
-                Barbers.full_name AS barber_name,
-                Services.service_name AS service_name,
-                Services.price AS price,
-                Services.duration_minutes AS duration_minutes,
-                Appointments.appointment_date,
-                Appointments.appointment_time,
-                Appointments.status
+                {BOOKING_LIST_COLUMNS},
+                Barbers.full_name AS barber_name
             FROM Appointments
             JOIN Barbers
                 ON Appointments.barber_id = Barbers.barber_id
@@ -528,7 +793,7 @@ def index():
             ORDER BY
                 Appointments.appointment_date ASC,
                 Appointments.appointment_time ASC
-        """, (customer["customer_id"],)).fetchall()
+        """, (customer["customer_id"],)).fetchall())
 
         # Upcoming = still booked and in the future (can be cancelled).
         # Everything else (completed, cancelled, time passed) goes to history.
@@ -538,13 +803,16 @@ def index():
             if a["status"] == "Booked"
             and f'{a["appointment_date"]} {a["appointment_time"]}' > now_str
         ]
-        history = [a for a in my_appointments if a not in upcoming]
+        upcoming_ids = {a["appointment_id"] for a in upcoming}
+        history = [a for a in my_appointments if a["appointment_id"] not in upcoming_ids]
         history.reverse()  # newest first
 
         return render_template(
             "index.html",
             barbers=barbers,
             services=services,
+            booking_times=BOOKING_TIMES,
+            min_duration=min((s["duration_minutes"] for s in services), default=SLOT_MINUTES),
             upcoming=upcoming,
             history=history,
             rateable=rateable,
@@ -570,50 +838,33 @@ def book():
     print("\n--- BOOKING REQUEST ---")
     print("Received fields:", list(request.form.keys()))
 
+    def back(message, category="error"):
+        flash(message, category)
+        return redirect(url_for("index") + "#booking")
+
     barber_id = request.form.get("barber_id", "").strip()
-    service_id = request.form.get("service_id", "").strip()
-    appointment_date = request.form.get(
-        "appointment_date", ""
-    ).strip()
-    appointment_time = request.form.get(
-        "appointment_time", ""
-    ).strip()
+    appointment_date = request.form.get("appointment_date", "").strip()
+    appointment_time = request.form.get("appointment_time", "").strip()
 
-    required_fields = {
-        "barber_id": barber_id,
-        "service_id": service_id,
-        "appointment_date": appointment_date,
-        "appointment_time": appointment_time
-    }
+    if not request.form.getlist("service_ids") and not request.form.get("service_id"):
+        print("BOOKING REJECTED: no services")
+        return back("Please choose at least one service.")
 
-    missing = [
-        field for field, value in required_fields.items()
-        if not value
-    ]
-
-    if missing:
-        print("BOOKING REJECTED: missing fields:", missing)
-        flash("Please fill in all fields.", "error")
-        return redirect(url_for("index"))
+    if not barber_id or not appointment_date or not appointment_time:
+        print("BOOKING REJECTED: missing fields")
+        return back("Please fill in all fields.")
 
     try:
         barber_id = int(barber_id)
-        service_id = int(service_id)
-
-        date_obj = datetime.strptime(appointment_date, "%Y-%m-%d")
-        time_obj = datetime.strptime(appointment_time, "%H:%M")
-
-        appointment_datetime = datetime.combine(date_obj.date(), time_obj.time())
-
-        if appointment_datetime <= datetime.now():
-            print("BOOKING REJECTED: time is in the past")
-            flash("You cannot book an appointment for a time that has already passed.", "error")
-            return redirect(url_for("index"))
-
+        datetime.strptime(appointment_date, "%Y-%m-%d")
+        datetime.strptime(appointment_time, "%H:%M")
     except ValueError as error:
         print("BOOKING REJECTED: invalid input:", error)
-        flash("Please enter a valid date, time, barber and service.", "error")
-        return redirect(url_for("index"))
+        return back("Please enter a valid date, time, barber and service.")
+
+    if appointment_time not in BOOKING_TIMES:
+        print("BOOKING REJECTED: not on the 30-minute grid:", appointment_time)
+        return back("Please choose a start time from the list (every 30 minutes).")
 
     conn = None
 
@@ -626,78 +877,32 @@ def book():
             WHERE barber_id = ?
         """, (barber_id,)).fetchone()
 
-        service = conn.execute("""
-            SELECT service_id
-            FROM Services
-            WHERE service_id = ?
-        """, (service_id,)).fetchone()
-
         if barber is None:
             print("BOOKING REJECTED: barber not found:", barber_id)
-            flash("The selected barber does not exist.", "error")
-            return redirect(url_for("index"))
+            return back("The selected barber does not exist.")
 
-        if service is None:
-            print("BOOKING REJECTED: service not found:", service_id)
-            flash("The selected service does not exist.", "error")
-            return redirect(url_for("index"))
+        services, error = selected_services(conn, request.form)
+        if error:
+            print("BOOKING REJECTED:", error)
+            return back(error)
+        total = sum(s["duration_minutes"] for s in services)
 
-        if not (
-            barber["work_start"]
-            <= appointment_time
-            < barber["work_end"]
-        ):
-            print("BOOKING REJECTED: outside working hours")
-            flash("Please select a time within the barber's working hours.", "error")
-            return redirect(url_for("index"))
+        # Lock the database for writing, so two clients cannot both pass the
+        # overlap check for overlapping times at the same moment.
+        conn.execute("BEGIN IMMEDIATE")
 
-        # Friendly messages: the barber is off (break) or the hour is taken.
-        # (The UNIQUE rule in the database still protects against races.)
-        busy = conn.execute("""
-            SELECT Services.service_name AS service_name
-            FROM Appointments
-            JOIN Services ON Appointments.service_id = Services.service_id
-            WHERE Appointments.barber_id = ?
-              AND Appointments.appointment_date = ?
-              AND Appointments.appointment_time = ?
-              AND Appointments.status != 'Cancelled'
-        """, (barber_id, appointment_date, appointment_time)).fetchone()
+        ok, state, message = fits(
+            to_minutes(appointment_time), total, barber,
+            busy_intervals(conn, barber_id, appointment_date),
+            date=appointment_date
+        )
+        if not ok:
+            conn.rollback()
+            print("BOOKING REJECTED:", state)
+            return back(message)
 
-        if busy is not None:
-            if busy["service_name"] == "System Break":
-                print("BOOKING REJECTED: barber is off")
-                flash("The barber is off at this time. Please choose another time.", "error")
-            else:
-                print("BOOKING REJECTED: slot already taken")
-                flash("This time is already booked by another client. Please choose another time.", "error")
-            return redirect(url_for("index"))
-
-        # A cancelled appointment still occupies the slot (UNIQUE rule),
-        # so remove it first. If the booking then fails, rollback restores it.
-        conn.execute("""
-            DELETE FROM Appointments
-            WHERE barber_id = ? AND appointment_date = ?
-              AND appointment_time = ? AND status = 'Cancelled'
-        """, (barber_id, appointment_date, appointment_time))
-
-        conn.execute("""
-            INSERT INTO Appointments (
-                customer_id,
-                barber_id,
-                service_id,
-                appointment_date,
-                appointment_time,
-                status
-            )
-            VALUES (?, ?, ?, ?, ?, 'Booked')
-        """, (
-            customer_id,
-            barber_id,
-            service_id,
-            appointment_date,
-            appointment_time
-        ))
-
+        insert_booking(conn, customer_id, barber_id,
+                       appointment_date, appointment_time, services)
         conn.commit()
 
         count = conn.execute(
@@ -708,16 +913,18 @@ def book():
         print("Database:", DB_PATH)
         print("Appointments count:", count)
 
+        end_time = fmt_hm(to_minutes(appointment_time) + total)
+        names = " + ".join(s["service_name"] for s in services)
+        done = (f"Appointment booked successfully! {appointment_date}, "
+                f"{appointment_time}–{end_time}: {names} ({total} min).")
+
         # A backup failure must not undo a saved booking.
         backup_path = create_backup()
 
         if backup_path:
-            flash("Appointment booked successfully!", "success")
+            flash(done, "success")
         else:
-            flash(
-                "Appointment booked successfully, "
-                "but the backup could not be created.", "success"
-            )
+            flash(done + " The backup could not be created.", "success")
 
     except sqlite3.IntegrityError as error:
         if conn is not None:
@@ -1084,21 +1291,24 @@ def logout():
     return redirect(url_for("index"))
 
 
-# ---------- Free / busy hours for the booking form ----------
-
-BOOKING_HOURS = range(9, 20)   # 09:00 ... 19:00, one slot per hour
-
+# ---------- Free / busy start times for the booking forms ----------
 
 @app.route("/availability")
-@customer_required
 def availability():
     """
-    JSON for the booking form: for one barber and one date, the state of
-    every hour: free, booked (another client), break (barber is off)
-    or outside (outside the barber's working hours).
+    JSON for the booking forms (client and admin): for one barber, one date
+    and one total length (?duration=minutes, the sum of the chosen services),
+    the state of every 30-minute start time:
+      free, booked, break, outside, past,
+      too_long (would run past the end of the shift),
+      overlap  (would run into a later booking or break).
     """
+    if current_customer() is None and not session.get("logged_in"):
+        return jsonify({"error": "login required"}), 401
+
     barber_id = request.args.get("barber_id", type=int)
     date = request.args.get("date", "")
+    duration = request.args.get("duration", type=int)
 
     try:
         datetime.strptime(date, "%Y-%m-%d")
@@ -1116,30 +1326,37 @@ def availability():
         if barber is None:
             return jsonify({"error": "no such barber"}), 404
 
-        taken = {
-            row["appointment_time"]: row["service_name"]
-            for row in conn.execute("""
-                SELECT Appointments.appointment_time, Services.service_name
-                FROM Appointments
-                JOIN Services ON Appointments.service_id = Services.service_id
-                WHERE Appointments.barber_id = ?
-                  AND Appointments.appointment_date = ?
-                  AND Appointments.status != 'Cancelled'
-            """, (barber_id, date))
-        }
+        shortest = min(
+            (s["duration_minutes"] for s in offered_services(conn)),
+            default=SLOT_MINUTES
+        )
+        if duration is None:
+            duration = shortest
+        duration = max(1, min(duration, 24 * 60))
+
+        busy = busy_intervals(conn, barber_id, date)
     finally:
         conn.close()
 
+    now = datetime.now()
     slots = {}
-    for hour in BOOKING_HOURS:
-        t = f"{hour:02d}:00"
-        if not (barber["work_start"] <= t < barber["work_end"]):
-            slots[t] = "outside"
-        elif t in taken:
-            slots[t] = "break" if taken[t] == "System Break" else "booked"
-        else:
-            slots[t] = "free"
-    return jsonify({"slots": slots})
+    free_shortest = 0
+    for t in BOOKING_TIMES:
+        _, state, _ = fits(to_minutes(t), duration, barber, busy, date=date, now=now)
+        slots[t] = state
+        # Would at least the shortest service fit here? (lets the form say
+        # "your combination is too long" instead of "the day is full")
+        if fits(to_minutes(t), shortest, barber, busy, date=date, now=now)[0]:
+            free_shortest += 1
+
+    return jsonify({
+        "slots": slots,
+        "duration": duration,
+        "work_start": barber["work_start"],
+        "work_end": barber["work_end"],
+        "free_count": sum(1 for s in slots.values() if s == "free"),
+        "free_count_shortest": free_shortest,
+    })
 
 
 # ---------- Change password (customer and barber) ----------
@@ -1233,8 +1450,8 @@ def barber_dashboard():
     conn = get_db()
     try:
         # Revenue from this barber's COMPLETED services in the chosen period
-        revenue_row = conn.execute("""
-            SELECT SUM(Services.price) AS total_revenue, COUNT(*) AS done_count
+        revenue_row = conn.execute(f"""
+            SELECT SUM({BOOKING_PRICE_SQL}) AS total_revenue, COUNT(*) AS done_count
             FROM Appointments
             JOIN Services ON Appointments.service_id = Services.service_id
             WHERE Appointments.barber_id = ?
@@ -1252,15 +1469,11 @@ def barber_dashboard():
 
         # Upcoming appointments (+ still-"Booked" ones from the last 14 days).
         # Breaks are shown separately in "Time off".
-        appointments = conn.execute(f"""
+        appointments = with_services(conn, conn.execute(f"""
             SELECT
-                Appointments.appointment_id,
+                {BOOKING_LIST_COLUMNS},
                 Customers.full_name AS customer_name,
-                {PHONE_FOR_DISPLAY} AS customer_phone,
-                Services.service_name AS service_name,
-                Appointments.appointment_date,
-                Appointments.appointment_time,
-                Appointments.status
+                {PHONE_FOR_DISPLAY} AS customer_phone
             FROM Appointments
             JOIN Customers ON Appointments.customer_id = Customers.customer_id
             JOIN Services ON Appointments.service_id = Services.service_id
@@ -1273,7 +1486,7 @@ def barber_dashboard():
                 Appointments.appointment_date ASC,
                 Appointments.appointment_time ASC
             LIMIT 50
-        """, (barber["barber_id"], today, two_weeks_ago)).fetchall()
+        """, (barber["barber_id"], today, two_weeks_ago)).fetchall())
 
         time_off = get_time_off(conn, today, barber["barber_id"])
     finally:
@@ -1348,8 +1561,8 @@ def admin():
 
     try:
         # Revenue for Completed appointments in the selected date range
-        revenue_row = conn.execute("""
-            SELECT SUM(Services.price) as total_revenue
+        revenue_row = conn.execute(f"""
+            SELECT SUM({BOOKING_PRICE_SQL}) as total_revenue
             FROM Appointments
             JOIN Services ON Appointments.service_id = Services.service_id
             WHERE Appointments.status = 'Completed'
@@ -1361,11 +1574,7 @@ def admin():
 
         barbers = barbers_with_ratings(conn)
 
-        services = conn.execute("""
-            SELECT * FROM Services
-            WHERE service_name != 'System Break'
-            ORDER BY service_id
-        """).fetchall()
+        services = offered_services(conn)
 
         # Clients for the "Add an appointment" form (not the hidden break client)
         customers = conn.execute(f"""
@@ -1381,16 +1590,12 @@ def admin():
         # Appointments from today on, plus still-"Booked" ones from the last
         # 14 days (so they can still be marked Completed / Cancelled).
         # Barber breaks are shown separately in "Time off".
-        appointments = conn.execute(f"""
+        appointments = with_services(conn, conn.execute(f"""
             SELECT
-                Appointments.appointment_id,
+                {BOOKING_LIST_COLUMNS},
                 Customers.full_name AS customer_name,
                 {PHONE_FOR_DISPLAY} AS customer_phone,
-                Barbers.full_name AS barber_name,
-                Services.service_name AS service_name,
-                Appointments.appointment_date,
-                Appointments.appointment_time,
-                Appointments.status
+                Barbers.full_name AS barber_name
             FROM Appointments
             JOIN Customers ON Appointments.customer_id = Customers.customer_id
             JOIN Barbers ON Appointments.barber_id = Barbers.barber_id
@@ -1403,7 +1608,7 @@ def admin():
                 Appointments.appointment_date ASC,
                 Appointments.appointment_time ASC
             LIMIT 50
-        """, (today_str, two_weeks_ago)).fetchall()
+        """, (today_str, two_weeks_ago)).fetchall())
 
         time_off = get_time_off(conn, today_str)
 
@@ -1412,6 +1617,8 @@ def admin():
             appointments=appointments,
             barbers=barbers,
             services=services,
+            booking_times=BOOKING_TIMES,
+            min_duration=min((s["duration_minutes"] for s in services), default=SLOT_MINUTES),
             customers=customers,
             time_off=time_off,
             today=today_str,
@@ -1431,20 +1638,19 @@ def admin():
 def add_appointment():
     mode = request.form.get("client_mode", "existing")
     barber_id = request.form.get("barber_id", "").strip()
-    service_id = request.form.get("service_id", "").strip()
     appointment_date = request.form.get("appointment_date", "").strip()
     appointment_time = request.form.get("appointment_time", "").strip()
 
     def back(message, category="error"):
         flash(message, category)
-        return redirect(url_for("admin"))
+        return redirect(url_for("admin") + "#admin-appt-form")
 
-    if not all([barber_id, service_id, appointment_date, appointment_time]):
-        return back("Please choose a barber, service, date and time.")
+    has_services = request.form.getlist("service_ids") or request.form.get("service_id")
+    if not all([barber_id, has_services, appointment_date, appointment_time]):
+        return back("Please choose a barber, at least one service, a date and a time.")
 
     try:
         barber_id = int(barber_id)
-        service_id = int(service_id)
         date_obj = datetime.strptime(appointment_date, "%Y-%m-%d").date()
         datetime.strptime(appointment_time, "%H:%M")
     except ValueError:
@@ -1452,6 +1658,8 @@ def add_appointment():
 
     if date_obj < datetime.now().date():
         return back("You cannot add an appointment for a day that has passed.")
+    if appointment_time not in BOOKING_TIMES:
+        return back("Please choose a start time from the list (every 30 minutes).")
 
     # ---- Check the client fields before touching the database ----
     walkin_name = ""
@@ -1484,21 +1692,24 @@ def add_appointment():
             "SELECT barber_id, full_name, work_start, work_end "
             "FROM Barbers WHERE barber_id = ?", (barber_id,)
         ).fetchone()
-        service = conn.execute(
-            "SELECT service_id FROM Services "
-            "WHERE service_id = ? AND service_name != 'System Break'",
-            (service_id,)
-        ).fetchone()
-
         if barber is None:
             return back("The selected barber does not exist.")
-        if service is None:
-            return back("The selected service does not exist.")
-        if not (barber["work_start"] <= appointment_time < barber["work_end"]):
-            return back(
-                f"{barber['full_name']} works {barber['work_start']} - "
-                f"{barber['work_end']}. Please choose a time in that range."
-            )
+
+        services, error = selected_services(conn, request.form)
+        if error:
+            return back(error)
+        total = sum(s["duration_minutes"] for s in services)
+
+        # Lock for writing, then check the whole block [start, start + total)
+        conn.execute("BEGIN IMMEDIATE")
+        ok, _, message = fits(
+            to_minutes(appointment_time), total, barber,
+            busy_intervals(conn, barber_id, appointment_date),
+            date=appointment_date
+        )
+        if not ok:
+            conn.rollback()
+            return back(f"{barber['full_name']}: {message}")
 
         # ---- Find or create the client ----
         if mode == "walkin":
@@ -1532,25 +1743,16 @@ def add_appointment():
                 return back("The selected client does not exist.")
             client_label = customer["full_name"]
 
-        # A cancelled appointment still holds the slot (UNIQUE rule): clear it
-        conn.execute("""
-            DELETE FROM Appointments
-            WHERE barber_id = ? AND appointment_date = ?
-              AND appointment_time = ? AND status = 'Cancelled'
-        """, (barber_id, appointment_date, appointment_time))
-
-        conn.execute("""
-            INSERT INTO Appointments
-                (customer_id, barber_id, service_id,
-                 appointment_date, appointment_time, status)
-            VALUES (?, ?, ?, ?, ?, 'Booked')
-        """, (customer_id, barber_id, service_id,
-              appointment_date, appointment_time))
+        insert_booking(conn, customer_id, barber_id,
+                       appointment_date, appointment_time, services)
         conn.commit()
         create_backup()
+        end_time = fmt_hm(to_minutes(appointment_time) + total)
+        names = " + ".join(s["service_name"] for s in services)
         flash(
-            f"Appointment added for {client_label}: {appointment_date} at "
-            f"{appointment_time} with {barber['full_name']}.", "success"
+            f"Appointment added for {client_label}: {appointment_date}, "
+            f"{appointment_time}–{end_time} with {barber['full_name']} "
+            f"({names}, {total} min).", "success"
         )
 
     except sqlite3.IntegrityError:
@@ -1646,9 +1848,24 @@ def add_break():
         blocked = 0
         skipped = []
 
+        # Client bookings per day (they can be longer than an hour and
+        # start at :30), so an hour that overlaps one is not blocked.
+        bookings_by_day = {}
+
         for slot in slots:
             d = slot.strftime("%Y-%m-%d")
             t = slot.strftime("%H:%M")
+
+            if d not in bookings_by_day:
+                bookings_by_day[d] = [
+                    (b_start, b_end) for b_start, b_end, kind
+                    in busy_intervals(conn, barber_id, d) if kind == "booked"
+                ]
+            start = to_minutes(t)
+            if any(b_start < start + BREAK_MINUTES and start < b_end
+                   for b_start, b_end in bookings_by_day[d]):
+                skipped.append(f"{d} {t}")
+                continue
 
             existing = conn.execute("""
                 SELECT appointment_id, status FROM Appointments
@@ -1657,6 +1874,8 @@ def add_break():
 
             if existing is not None:
                 if existing["status"] == "Cancelled":
+                    conn.execute("DELETE FROM AppointmentServices WHERE appointment_id = ?",
+                                 (existing["appointment_id"],))
                     conn.execute("DELETE FROM Appointments WHERE appointment_id = ?",
                                  (existing["appointment_id"],))
                 else:
@@ -1874,9 +2093,33 @@ def update_status(appointment_id):
 
     conn = get_db()
     try:
+        # Making a cancelled booking active again: its time must still be free
+        if new_status == "Booked":
+            appt = conn.execute(f"""
+                SELECT Appointments.barber_id, Appointments.appointment_date,
+                       Appointments.appointment_time, Appointments.status,
+                       {APPT_MINUTES_SQL} AS minutes
+                FROM Appointments
+                JOIN Services ON Appointments.service_id = Services.service_id
+                WHERE Appointments.appointment_id = ?
+            """, (appointment_id,)).fetchone()
+            if appt is not None and appt["status"] == "Cancelled":
+                barber = conn.execute(
+                    "SELECT work_start, work_end FROM Barbers WHERE barber_id = ?",
+                    (appt["barber_id"],)
+                ).fetchone()
+                ok, _, message = fits(
+                    to_minutes(appt["appointment_time"]), appt["minutes"], barber,
+                    busy_intervals(conn, appt["barber_id"], appt["appointment_date"],
+                                   exclude_id=appointment_id)
+                )
+                if not ok:
+                    flash(f"Appointment #{appointment_id} cannot be restored. {message}", "error")
+                    return redirect(url_for("admin"))
+
         conn.execute("""
-            UPDATE Appointments 
-            SET status = ? 
+            UPDATE Appointments
+            SET status = ?
             WHERE appointment_id = ?
         """, (new_status, appointment_id))
         conn.commit()
