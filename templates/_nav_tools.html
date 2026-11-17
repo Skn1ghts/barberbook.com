@@ -6,7 +6,7 @@
 <div class="nav-tools">
     <nav class="lang-switch" aria-label="{{ _('Language') }}">
         {%- for code, (label, name) in LANGUAGES.items() %}
-        <a href="{{ url_for('set_language', code=code) }}" lang="{{ code }}" hreflang="{{ code }}" title="{{ name }}"
+        <a href="{{ url_for('set_language', code=code, next=request.full_path if request.query_string else request.path) }}" lang="{{ code }}" hreflang="{{ code }}" title="{{ name }}"
            {%- if code == lang %} class="active" aria-current="true"{% endif %}>{{ label }}</a>
         {%- endfor %}
     </nav>

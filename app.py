@@ -64,7 +64,13 @@ def inject_language():
 def set_language(code):
     """Remembers the chosen language (session + cookie for a year) and goes back."""
     target = url_for("index")
-    referrer = request.referrer
+    # The page to return to: ?next=/path (sent by the switch itself, works even
+    # when the phone's browser sends no Referer), otherwise the Referer.
+    next_path = request.args.get("next", "")
+    if next_path.startswith("/") and not next_path.startswith("//") and "\\" not in next_path:
+        referrer = request.host_url.rstrip("/") + next_path
+    else:
+        referrer = request.referrer
     if referrer:
         parts = urlsplit(referrer)
         if parts.scheme in ("http", "https") and parts.netloc == request.host:
